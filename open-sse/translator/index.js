@@ -236,6 +236,7 @@ export function initState(sourceFormat) {
       funcCallIds: {},
       funcArgsDone: {},
       funcItemDone: {},
+      customToolCalls: {},
       completedSent: false
     };
   }

@@ -1,3 +1,5 @@
+import { isCustomToolCallItem, getToolCallInput } from "./toolCallHelper.js";
+
 /**
  * Normalize Responses API input to array format.
  * Accepts string or array, returns array of message items.
@@ -78,7 +80,7 @@ export function convertResponsesApiFormat(body) {
         : item.content;
       result.messages.push({ role: item.role, content });
     }
-    else if (itemType === "function_call") {
+    else if (itemType === "function_call" || itemType === "custom_tool_call") {
       // Start or append to assistant message with tool_calls
       if (!currentAssistantMsg) {
         currentAssistantMsg = {
@@ -89,14 +91,25 @@ export function convertResponsesApiFormat(body) {
       }
       // Skip items with empty/missing name — upstream APIs reject nameless tool calls (#444)
       if (!item.name || typeof item.name !== "string" || item.name.trim() === "") continue;
-      currentAssistantMsg.tool_calls.push({
-        id: item.call_id,
-        type: "function",
-        function: {
-          name: item.name,
-          arguments: item.arguments
-        }
-      });
+      if (isCustomToolCallItem(item)) {
+        currentAssistantMsg.tool_calls.push({
+          id: item.call_id,
+          type: "custom",
+          custom: {
+            name: item.name,
+            input: getToolCallInput(item)
+          }
+        });
+      } else {
+        currentAssistantMsg.tool_calls.push({
+          id: item.call_id,
+          type: "function",
+          function: {
+            name: item.name,
+            arguments: item.arguments
+          }
+        });
+      }
     }
     else if (itemType === "function_call_output") {
       // Flush assistant message first if exists

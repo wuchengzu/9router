@@ -5,6 +5,9 @@ import { translateRequest } from "../../open-sse/translator/index.js";
 import { claudeToOpenAIRequest } from "../../open-sse/translator/request/claude-to-openai.js";
 import { filterToOpenAIFormat } from "../../open-sse/translator/helpers/openaiHelper.js";
 import { parseSSELine } from "../../open-sse/utils/streamHelpers.js";
+import { openaiResponsesToOpenAIRequest } from "../../open-sse/translator/request/openai-responses.js";
+import { openaiToOpenAIResponsesResponse } from "../../open-sse/translator/response/openai-responses.js";
+import { getTargetFormat, buildProviderUrl } from "../../open-sse/services/provider.js";
 
 describe("request normalization", () => {
   it("claudeToOpenAIRequest flattens text-only content arrays into string", () => {
@@ -162,6 +165,131 @@ describe("request normalization", () => {
     );
 
     expect(result.output_config).toEqual(body.output_config);
+  });
+
+  it("preserves Responses custom tool definitions without JSON schema parameters", () => {
+    const body = {
+      input: "edit file",
+      tools: [{ type: "custom", name: "patch_tool", description: "accepts raw patch text" }],
+    };
+
+    const result = openaiResponsesToOpenAIRequest("gpt-5.3-codex", JSON.parse(JSON.stringify(body)), true);
+
+    expect(result.tools).toEqual([{ type: "custom", name: "patch_tool", description: "accepts raw patch text" }]);
+    expect(result.tools[0].function).toBeUndefined();
+    expect(result.tools[0].parameters).toBeUndefined();
+  });
+
+  it("preserves Responses custom tool call input without JSON arguments wrapping", () => {
+    const rawInput = "*** Begin Patch\n*** Update File: a.txt\n@@\n-old\n+new\n*** End Patch";
+    const body = {
+      input: [
+        { type: "message", role: "user", content: [{ type: "input_text", text: "edit" }] },
+        { type: "custom_tool_call", call_id: "call_custom_1", name: "patch_tool", input: rawInput },
+      ],
+    };
+
+    const result = openaiResponsesToOpenAIRequest("gpt-5.3-codex", JSON.parse(JSON.stringify(body)), true);
+    const customCall = result.messages.find((m) => m.role === "assistant")?.tool_calls?.[0];
+
+    expect(customCall).toMatchObject({
+      id: "call_custom_1",
+      type: "custom",
+      custom: { name: "patch_tool", input: rawInput },
+    });
+    expect(customCall.function).toBeUndefined();
+    expect(JSON.stringify(customCall)).not.toContain('"arguments"');
+  });
+
+  it("keeps ordinary function tool arguments JSON-serializable", () => {
+    const body = {
+      messages: [{
+        role: "assistant",
+        content: null,
+        tool_calls: [{
+          id: "call_func_1",
+          type: "function",
+          function: { name: "shell", arguments: { command: "pwd" } },
+        }],
+      }],
+    };
+
+    const result = translateRequest(
+      FORMATS.OPENAI,
+      FORMATS.OPENAI,
+      "gpt-5.3-codex",
+      JSON.parse(JSON.stringify(body)),
+      true,
+    );
+
+    const args = result.messages[0].tool_calls[0].function.arguments;
+    expect(typeof args).toBe("string");
+    expect(JSON.parse(args)).toEqual({ command: "pwd" });
+  });
+
+  it("emits custom tool call input events for custom chat tool calls", () => {
+    const rawInput = "plain freeform payload";
+    const state = {
+      seq: 0,
+      responseId: "resp_test",
+      created: 123,
+      started: false,
+      msgTextBuf: {},
+      msgItemAdded: {},
+      msgContentAdded: {},
+      msgItemDone: {},
+      reasoningId: "",
+      reasoningIndex: -1,
+      reasoningBuf: "",
+      reasoningPartAdded: false,
+      reasoningDone: false,
+      inThinking: false,
+      funcArgsBuf: {},
+      funcNames: {},
+      funcCallIds: {},
+      funcArgsDone: {},
+      funcItemDone: {},
+      completedSent: false,
+    };
+
+    const addedEvents = openaiToOpenAIResponsesResponse({
+      id: "chatcmpl_test",
+      choices: [{
+        index: 0,
+        delta: {
+          tool_calls: [{
+            index: 0,
+            id: "call_custom_1",
+            type: "custom",
+            custom: { name: "patch_tool", input: rawInput },
+          }],
+        },
+      }],
+    }, state);
+    const doneEvents = openaiToOpenAIResponsesResponse({
+      id: "chatcmpl_test",
+      choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+    }, state);
+    const events = [...addedEvents, ...doneEvents];
+
+    expect(events.some((e) => e.event === "response.custom_tool_call_input.delta" && e.data.delta === rawInput)).toBe(true);
+    expect(events.some((e) => e.event === "response.function_call_arguments.delta")).toBe(false);
+    const doneItem = events.find((e) => e.event === "response.output_item.done")?.data.item;
+    expect(doneItem).toMatchObject({
+      type: "custom_tool_call",
+      call_id: "call_custom_1",
+      name: "patch_tool",
+      input: rawInput,
+    });
+    expect(doneItem.arguments).toBeUndefined();
+  });
+
+  it("uses providerSpecificData apiType for OpenAI-compatible Responses connections", () => {
+    const provider = "openai-compatible-chat-test";
+    const credentials = { providerSpecificData: { apiType: "responses", baseUrl: "https://example.test/v1" } };
+
+    expect(getTargetFormat(provider, credentials)).toBe(FORMATS.OPENAI_RESPONSES);
+    expect(buildProviderUrl(provider, "gpt-5.5", true, credentials.providerSpecificData)).toBe("https://example.test/v1/responses");
   });
 
   it("parseSSELine supports provider raw NDJSON stream lines", () => {
