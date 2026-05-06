@@ -4,22 +4,16 @@ Unit tests for the `/v1/embeddings` endpoint implementation.
 
 ## Setup
 
-Vitest must be installed globally or in `/tmp/node_modules` (due to npm workspace hoisting from the root Next.js project):
+Install test dependencies in this directory to keep Vitest out of the production Next.js package:
 
 ```bash
-cd /tmp && npm install vitest
+cd tests && npm install
 ```
 
 ## Running Tests
 
 ```bash
 cd tests/
-NODE_PATH=/tmp/node_modules /tmp/node_modules/.bin/vitest run --reporter=verbose --config ./vitest.config.js
-```
-
-Or using the package script (from the `tests/` directory):
-
-```bash
 npm test
 ```
 
