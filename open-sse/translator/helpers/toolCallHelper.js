@@ -2,6 +2,27 @@
 
 // Anthropic tool_use.id must match: ^[a-zA-Z0-9_-]+$
 const TOOL_ID_PATTERN = /^[a-zA-Z0-9_-]+$/;
+const CUSTOM_TOOL_TYPES = new Set(["custom", "custom_tool", "custom_tool_call"]);
+
+export function isCustomToolDefinition(tool) {
+  if (!tool || typeof tool !== "object") return false;
+  return CUSTOM_TOOL_TYPES.has(tool.type) || CUSTOM_TOOL_TYPES.has(tool.function?.type);
+}
+
+export function isCustomToolCallItem(item) {
+  if (!item || typeof item !== "object") return false;
+  return CUSTOM_TOOL_TYPES.has(item.type) || item.type === "custom_tool_call" || !!item.custom;
+}
+
+export function getToolCallName(item) {
+  return item?.name || item?.custom?.name || item?.function?.name || "";
+}
+
+export function getToolCallInput(item) {
+  if (!item || typeof item !== "object") return "";
+  const input = item.input ?? item.custom?.input ?? item.custom?.arguments ?? item.function?.arguments ?? "";
+  return typeof input === "string" ? input : JSON.stringify(input);
+}
 
 // Generate deterministic tool call ID from position + tool name (cache-friendly)
 export function generateToolCallId(msgIndex = 0, tcIndex = 0, toolName = "") {
@@ -28,13 +49,14 @@ export function ensureToolCallIds(body) {
         // Validate or regenerate ID for Anthropic compatibility
         if (!tc.id || !TOOL_ID_PATTERN.test(tc.id)) {
           const sanitized = sanitizeToolId(tc.id);
-          tc.id = sanitized || generateToolCallId(i, j, tc.function?.name);
+          tc.id = sanitized || generateToolCallId(i, j, getToolCallName(tc));
         }
         if (!tc.type) {
-          tc.type = "function";
+          tc.type = tc.custom ? "custom" : "function";
         }
-        // Ensure arguments is JSON string, not object
-        if (tc.function?.arguments && typeof tc.function.arguments !== "string") {
+        // Ensure ordinary function arguments are JSON strings. Custom/freeform
+        // tools carry raw text input and must not be coerced to JSON.
+        if (!isCustomToolCallItem(tc) && tc.function?.arguments && typeof tc.function.arguments !== "string") {
           tc.function.arguments = JSON.stringify(tc.function.arguments);
         }
       }

@@ -25,8 +25,14 @@ function processSSEMessage(msg, state) {
   if (eventType === "response.created") {
     state.responseId = parsed.response?.id || state.responseId;
     state.created = parsed.response?.created_at || state.created;
+  } else if (eventType === "response.custom_tool_call_input.done") {
+    state.customInputs.set(parsed.output_index ?? 0, parsed.input || "");
   } else if (eventType === "response.output_item.done") {
-    state.items.set(parsed.output_index ?? 0, parsed.item);
+    const item = parsed.item;
+    if (item?.type === "custom_tool_call" && item.input === undefined) {
+      item.input = state.customInputs.get(parsed.output_index ?? 0) || "";
+    }
+    state.items.set(parsed.output_index ?? 0, item);
   } else if (eventType === "response.completed") {
     state.status = "completed";
     if (parsed.response?.usage) {
@@ -60,7 +66,8 @@ export async function convertResponsesStreamToJson(stream) {
     created: Math.floor(Date.now() / 1000),
     status: "in_progress",
     usage: { ...EMPTY_RESPONSE },
-    items: new Map()
+    items: new Map(),
+    customInputs: new Map()
   };
 
   try {

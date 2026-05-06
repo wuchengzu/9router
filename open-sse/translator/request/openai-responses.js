@@ -7,6 +7,7 @@
 import { register } from "../index.js";
 import { FORMATS } from "../formats.js";
 import { normalizeResponsesInput } from "../helpers/responsesApiHelper.js";
+import { isCustomToolDefinition, isCustomToolCallItem, getToolCallInput } from "../helpers/toolCallHelper.js";
 
 // Responses API enforces max 64 chars on call_id (#393)
 const MAX_CALL_ID_LEN = 64;
@@ -66,7 +67,7 @@ export function openaiResponsesToOpenAIRequest(model, body, stream, credentials)
         : item.content;
       result.messages.push({ role: item.role, content });
     }
-    else if (itemType === "function_call") {
+    else if (itemType === "function_call" || itemType === "custom_tool_call") {
       // Start or append to assistant message with tool_calls
       if (!currentAssistantMsg) {
         currentAssistantMsg = {
@@ -77,14 +78,25 @@ export function openaiResponsesToOpenAIRequest(model, body, stream, credentials)
       }
       // Skip items with empty/missing name — Codex/OpenAI reject nameless tool calls (#444)
       if (!item.name || typeof item.name !== "string" || item.name.trim() === "") continue;
-      currentAssistantMsg.tool_calls.push({
-        id: item.call_id,
-        type: "function",
-        function: {
-          name: item.name,
-          arguments: item.arguments
-        }
-      });
+      if (isCustomToolCallItem(item)) {
+        currentAssistantMsg.tool_calls.push({
+          id: item.call_id,
+          type: "custom",
+          custom: {
+            name: item.name,
+            input: getToolCallInput(item)
+          }
+        });
+      } else {
+        currentAssistantMsg.tool_calls.push({
+          id: item.call_id,
+          type: "function",
+          function: {
+            name: item.name,
+            arguments: item.arguments
+          }
+        });
+      }
     }
     else if (itemType === "function_call_output") {
       // Flush assistant message first if exists
@@ -130,6 +142,7 @@ export function openaiResponsesToOpenAIRequest(model, body, stream, credentials)
   if (body.tools && Array.isArray(body.tools)) {
     result.tools = body.tools
       .map(tool => {
+        if (isCustomToolDefinition(tool)) return tool;
         // Already in Chat Completions format: { type: "function", function: { name, ... } }
         if (tool.function) return tool;
         // Responses API function tool: { type: "function", name, description, parameters }
@@ -234,12 +247,21 @@ export function openaiToOpenAIResponsesRequest(model, body, stream, credentials)
     // Convert tool calls
     if (msg.role === "assistant" && msg.tool_calls) {
       for (const tc of msg.tool_calls) {
-        result.input.push({
-          type: "function_call",
-          call_id: clampCallId(tc.id),
-          name: tc.function?.name || "_unknown",
-          arguments: tc.function?.arguments || "{}"
-        });
+        if (isCustomToolCallItem(tc)) {
+          result.input.push({
+            type: "custom_tool_call",
+            call_id: clampCallId(tc.id),
+            name: tc.custom?.name || tc.name || "_unknown",
+            input: getToolCallInput(tc)
+          });
+        } else {
+          result.input.push({
+            type: "function_call",
+            call_id: clampCallId(tc.id),
+            name: tc.function?.name || "_unknown",
+            arguments: tc.function?.arguments || "{}"
+          });
+        }
       }
     }
 
@@ -266,6 +288,7 @@ export function openaiToOpenAIResponsesRequest(model, body, stream, credentials)
   // Convert tools format
   if (body.tools && Array.isArray(body.tools)) {
     result.tools = body.tools.map(tool => {
+      if (isCustomToolDefinition(tool)) return tool;
       if (tool.type === "function") {
         return {
           type: "function",

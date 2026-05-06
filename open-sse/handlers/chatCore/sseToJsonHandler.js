@@ -143,16 +143,29 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, pr
       const outTokens = usage.output_tokens || 0;
       let finalResp;
 
-      // Extract tool calls from Responses API output (function_call items)
-      const funcCallItems = (jsonResponse.output || []).filter(item => item.type === "function_call");
-      const toolCalls = funcCallItems.map((item, idx) => ({
-        id: item.call_id || `call_${item.name}_${Date.now()}_${idx}`,
-        type: "function",
-        function: {
-          name: item.name,
-          arguments: typeof item.arguments === "string" ? item.arguments : JSON.stringify(item.arguments || {})
-        }
-      }));
+      // Extract tool calls from Responses API output. Preserve custom/freeform
+      // tool input separately from ordinary JSON function arguments.
+      const responseOutput = jsonResponse.output || [];
+      const funcCallItems = responseOutput.filter(item => item.type === "function_call");
+      const customToolCallItems = responseOutput.filter(item => item.type === "custom_tool_call");
+      const toolCalls = [
+        ...funcCallItems.map((item, idx) => ({
+          id: item.call_id || `call_${item.name}_${Date.now()}_${idx}`,
+          type: "function",
+          function: {
+            name: item.name,
+            arguments: typeof item.arguments === "string" ? item.arguments : JSON.stringify(item.arguments || {})
+          }
+        })),
+        ...customToolCallItems.map((item, idx) => ({
+          id: item.call_id || `call_${item.name}_${Date.now()}_custom_${idx}`,
+          type: "custom",
+          custom: {
+            name: item.name,
+            input: typeof item.input === "string" ? item.input : JSON.stringify(item.input || "")
+          }
+        }))
+      ];
       const hasToolCalls = toolCalls.length > 0;
 
       if (sourceFormat === FORMATS.ANTIGRAVITY || sourceFormat === FORMATS.GEMINI || sourceFormat === FORMATS.GEMINI_CLI) {
