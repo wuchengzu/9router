@@ -47,6 +47,7 @@ next-env.d.ts
 .bin/*
 data/
 logs/*
+packages/cli/app/
 source/*
 .cursor/*
 docs/*
