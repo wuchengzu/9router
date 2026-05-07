@@ -23,13 +23,13 @@ function getDataDir() {
 
 const dataDir = getDataDir();
 const runtimeDir = path.join(dataDir, 'runtime');
-const pidFile = path.join(runtimeDir, '9router.pid');
-const logFile = path.join(runtimeDir, '9router.log');
+const pidFile = path.join(runtimeDir, '9routerd.pid');
+const logFile = path.join(runtimeDir, '9routerd.log');
 
 function usage(exitCode = 0) {
   const out = exitCode === 0 ? console.log : console.error;
   out([
-    'Usage: 9router [start|stop|status|log] [options]',
+    'Usage: 9routerd [start|stop|status|log] [options]',
     '',
     'Commands:',
     '  start              Start 9Router in the background',
@@ -112,7 +112,7 @@ async function start() {
     BASE_URL: process.env.BASE_URL || baseUrl,
   };
 
-  fs.appendFileSync(logFile, `\n[9router] starting ${new Date().toISOString()} port=${port} hostname=${hostname}\n`);
+  fs.appendFileSync(logFile, `\n[9routerd] starting ${new Date().toISOString()} port=${port} hostname=${hostname}\n`);
   const child = spawn(process.execPath, [serverFile], { cwd: appDir, env, detached: true, stdio: ['ignore', out, err] });
   child.unref();
   writePid(child.pid);
@@ -128,7 +128,7 @@ async function start() {
   console.log(`9Router started (pid ${child.pid}).`);
   console.log(`Dashboard: http://localhost:${port}/dashboard`);
   console.log(`Log: ${logFile}`);
-  if (!reachable) console.log('Service process is running; the port is not reachable yet. Check `9router log` if it does not become available.');
+  if (!reachable) console.log('Service process is running; the port is not reachable yet. Check `9routerd log` if it does not become available.');
 }
 
 async function stop() {

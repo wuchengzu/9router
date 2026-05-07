@@ -6,21 +6,21 @@ import { describe, expect, test } from "vitest";
 const repoRoot = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const cliRoot = path.join(repoRoot, "packages", "cli");
 
-describe("9router CLI package", () => {
-  test("declares the publishable 9router package and global bin", () => {
+describe("9routerd CLI package", () => {
+  test("declares the publishable 9routerd package and global bin", () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(cliRoot, "package.json"), "utf8"));
 
-    expect(pkg.name).toBe("9router");
+    expect(pkg.name).toBe("9routerd");
     expect(pkg.version).toBe("0.4.18+1");
     expect(pkg.private).not.toBe(true);
-    expect(pkg.bin).toEqual({ "9router": "./bin/9router.js" });
+    expect(pkg.bin).toEqual({ "9routerd": "./bin/9routerd.js" });
     expect(pkg.files).toEqual(expect.arrayContaining(["bin/", "scripts/", "app/", "README.md"]));
     expect(pkg.scripts["prepare:app"]).toBe("node scripts/prepare-app.js");
     expect(pkg.scripts.prepack).toBe("npm run prepare:app");
   });
 
   test("ships executable CLI and app preparation script", () => {
-    const bin = path.join(cliRoot, "bin", "9router.js");
+    const bin = path.join(cliRoot, "bin", "9routerd.js");
     const prepare = path.join(cliRoot, "scripts", "prepare-app.js");
 
     expect(fs.existsSync(bin)).toBe(true);
