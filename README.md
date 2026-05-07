@@ -74,7 +74,15 @@ Result: Never stop coding, minimal cost + 20-40% token savings via RTK
 
 ```bash
 npm install -g 9router
-9router
+9router start
+```
+
+Service management:
+
+```bash
+9router status
+9router log --lines 50
+9router stop
 ```
 
 🎉 Dashboard opens at `http://localhost:20128`
@@ -1036,14 +1044,11 @@ export NEXT_PUBLIC_CLOUD_URL="https://9router.com"
 export API_KEY_SECRET="endpoint-proxy-api-key-secret"
 export MACHINE_ID_SALT="endpoint-proxy-salt"
 
-# Start
-npm run start
-
-# Or use PM2
-npm install -g pm2
-pm2 start npm --name 9router -- start
-pm2 save
-pm2 startup
+# Start with the global service manager
+npm install -g 9router
+9router start
+9router status
+9router log --lines 50
 ```
 
 ### Docker
