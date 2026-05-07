@@ -73,16 +73,16 @@ Result: Never stop coding, minimal cost + 20-40% token savings via RTK
 **1. Install globally:**
 
 ```bash
-npm install -g 9router
-9router start
+npm install -g 9routerd
+9routerd start
 ```
 
 Service management:
 
 ```bash
-9router status
-9router log --lines 50
-9router stop
+9routerd status
+9routerd log --lines 50
+9routerd stop
 ```
 
 🎉 Dashboard opens at `http://localhost:20128`
@@ -1045,10 +1045,10 @@ export API_KEY_SECRET="endpoint-proxy-api-key-secret"
 export MACHINE_ID_SALT="endpoint-proxy-salt"
 
 # Start with the global service manager
-npm install -g 9router
-9router start
-9router status
-9router log --lines 50
+npm install -g 9routerd
+9routerd start
+9routerd status
+9routerd log --lines 50
 ```
 
 ### Docker
