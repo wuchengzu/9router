@@ -1,10 +1,10 @@
 {
-  "name": "9router",
+  "name": "9routerd",
   "version": "0.4.18+1",
-  "description": "9Router global CLI and service manager",
+  "description": "9Router daemon CLI and service manager",
   "license": "MIT",
   "bin": {
-    "9router": "./bin/9router.js"
+    "9routerd": "./bin/9routerd.js"
   },
   "files": [
     "bin/",
