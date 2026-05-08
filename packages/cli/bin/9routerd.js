@@ -29,11 +29,12 @@ const logFile = path.join(runtimeDir, '9routerd.log');
 function usage(exitCode = 0) {
   const out = exitCode === 0 ? console.log : console.error;
   out([
-    'Usage: 9routerd [start|stop|status|log] [options]',
+    'Usage: 9routerd [start|stop|restart|status|log] [options]',
     '',
     'Commands:',
     '  start              Start 9Router in the background',
     '  stop               Stop the background service',
+    '  restart            Stop and start the background service',
     '  status             Show service status',
     '  log                Print service logs',
     '',
@@ -146,6 +147,12 @@ async function stop() {
   console.log(`9Router did not stop after SIGTERM; sent SIGKILL to pid ${pid}.`);
 }
 
+async function restart() {
+  console.log('Restarting 9Router...');
+  await stop();
+  await start();
+}
+
 function status() {
   cleanupStalePid();
   const pid = readPid();
@@ -220,6 +227,7 @@ async function main() {
   if (command === '-h' || command === '--help' || command === 'help') usage(0);
   if (command === 'start') return start();
   if (command === 'stop') return stop();
+  if (command === 'restart') return restart();
   if (command === 'status') return status();
   if (command === 'log') return showLog(args);
   console.error(`Unknown command: ${command}`);
