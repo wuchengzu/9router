@@ -5,6 +5,7 @@ This package provides the global `9routerd` command for running the prebuilt 9Ro
 ```bash
 npm install -g 9routerd
 9routerd start
+9routerd restart
 9routerd status
 9routerd log --lines 50
 9routerd stop

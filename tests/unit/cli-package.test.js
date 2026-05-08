@@ -11,7 +11,7 @@ describe("9routerd CLI package", () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(cliRoot, "package.json"), "utf8"));
 
     expect(pkg.name).toBe("9routerd");
-    expect(pkg.version).toBe("0.4.18+1");
+    expect(pkg.version).toBe("0.4.18+2");
     expect(pkg.private).not.toBe(true);
     expect(pkg.bin).toEqual({ "9routerd": "./bin/9routerd.js" });
     expect(pkg.files).toEqual(expect.arrayContaining(["bin/", "scripts/", "app/", "README.md"]));
@@ -22,9 +22,12 @@ describe("9routerd CLI package", () => {
   test("ships executable CLI and app preparation script", () => {
     const bin = path.join(cliRoot, "bin", "9routerd.js");
     const prepare = path.join(cliRoot, "scripts", "prepare-app.js");
+    const binSource = fs.readFileSync(bin, "utf8");
 
     expect(fs.existsSync(bin)).toBe(true);
-    expect(fs.readFileSync(bin, "utf8")).toContain("start");
+    expect(binSource).toContain("start");
+    expect(binSource).toContain("restart");
+    expect(binSource).toContain("if (command === 'restart') return restart();");
     expect(fs.statSync(bin).mode & 0o111).toBeGreaterThan(0);
     expect(fs.existsSync(prepare)).toBe(true);
     expect(fs.readFileSync(prepare, "utf8")).toContain(".next/standalone/server.js");

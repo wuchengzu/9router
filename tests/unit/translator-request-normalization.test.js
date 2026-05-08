@@ -5,7 +5,7 @@ import { translateRequest } from "../../open-sse/translator/index.js";
 import { claudeToOpenAIRequest } from "../../open-sse/translator/request/claude-to-openai.js";
 import { filterToOpenAIFormat } from "../../open-sse/translator/helpers/openaiHelper.js";
 import { parseSSELine } from "../../open-sse/utils/streamHelpers.js";
-import { openaiResponsesToOpenAIRequest } from "../../open-sse/translator/request/openai-responses.js";
+import { openaiResponsesToOpenAIRequest, openaiToOpenAIResponsesRequest } from "../../open-sse/translator/request/openai-responses.js";
 import { openaiToOpenAIResponsesResponse } from "../../open-sse/translator/response/openai-responses.js";
 import { getTargetFormat, buildProviderUrl } from "../../open-sse/services/provider.js";
 
@@ -290,6 +290,35 @@ describe("request normalization", () => {
 
     expect(getTargetFormat(provider, credentials)).toBe(FORMATS.OPENAI_RESPONSES);
     expect(buildProviderUrl(provider, "gpt-5.5", true, credentials.providerSpecificData)).toBe("https://example.test/v1/responses");
+  });
+
+  it("maps Chat Completions token limits to Responses max_output_tokens", () => {
+    const baseBody = {
+      messages: [{ role: "user", content: "hi" }],
+    };
+
+    const maxTokensResult = openaiToOpenAIResponsesRequest("gpt-test", {
+      ...baseBody,
+      max_tokens: 1,
+    }, false);
+    expect(maxTokensResult.max_output_tokens).toBe(1);
+    expect(maxTokensResult.max_tokens).toBeUndefined();
+
+    const maxCompletionTokensResult = openaiToOpenAIResponsesRequest("gpt-test", {
+      ...baseBody,
+      max_completion_tokens: 2,
+    }, false);
+    expect(maxCompletionTokensResult.max_output_tokens).toBe(2);
+    expect(maxCompletionTokensResult.max_tokens).toBeUndefined();
+
+    const maxOutputTokensResult = openaiToOpenAIResponsesRequest("gpt-test", {
+      ...baseBody,
+      max_output_tokens: 3,
+      max_completion_tokens: 2,
+      max_tokens: 1,
+    }, false);
+    expect(maxOutputTokensResult.max_output_tokens).toBe(3);
+    expect(maxOutputTokensResult.max_tokens).toBeUndefined();
   });
 
   it("parseSSELine supports provider raw NDJSON stream lines", () => {
