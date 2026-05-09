@@ -11,7 +11,7 @@ describe("9routerd CLI package", () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(cliRoot, "package.json"), "utf8"));
 
     expect(pkg.name).toBe("9routerd");
-    expect(pkg.version).toBe("0.4.18+2");
+    expect(pkg.version).toBe("0.4.20+1");
     expect(pkg.private).not.toBe(true);
     expect(pkg.bin).toEqual({ "9routerd": "./bin/9routerd.js" });
     expect(pkg.files).toEqual(expect.arrayContaining(["bin/", "scripts/", "app/", "README.md"]));
