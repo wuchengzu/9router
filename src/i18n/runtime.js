@@ -5,6 +5,7 @@ import { DEFAULT_LOCALE, LOCALE_COOKIE, normalizeLocale } from "./config";
 let translationMap = {};
 let currentLocale = DEFAULT_LOCALE;
 let reloadCallbacks = [];
+let domObserver = null;
 
 // Read locale from cookie
 function getLocaleFromCookie() {
@@ -30,6 +31,10 @@ async function loadTranslations(locale) {
     console.error("Failed to load translations:", err);
     translationMap = {};
   }
+}
+
+function shouldEnableRuntimeI18n(locale) {
+  return locale !== DEFAULT_LOCALE;
 }
 
 // Translate text - exported for use in components
@@ -120,18 +125,17 @@ function processElement(element) {
   nodesToProcess.forEach(processTextNode);
 }
 
-// Initialize runtime i18n
-export async function initRuntimeI18n() {
-  if (typeof window === "undefined") return;
-  
-  currentLocale = getLocaleFromCookie();
-  await loadTranslations(currentLocale);
-  
-  // Process existing DOM
-  processElement(document.body);
-  
-  // Watch for new nodes
-  const observer = new MutationObserver((mutations) => {
+function disconnectObserver() {
+  if (domObserver) {
+    domObserver.disconnect();
+    domObserver = null;
+  }
+}
+
+function ensureObserver() {
+  if (typeof window === "undefined" || domObserver || !document?.body) return;
+
+  domObserver = new MutationObserver((mutations) => {
     mutations.forEach((mutation) => {
       mutation.addedNodes.forEach((node) => {
         if (node.nodeType === Node.ELEMENT_NODE) {
@@ -142,11 +146,28 @@ export async function initRuntimeI18n() {
       });
     });
   });
-  
-  observer.observe(document.body, {
+
+  domObserver.observe(document.body, {
     childList: true,
     subtree: true,
   });
+}
+
+// Initialize runtime i18n
+export async function initRuntimeI18n() {
+  if (typeof window === "undefined") return;
+  
+  currentLocale = getLocaleFromCookie();
+  await loadTranslations(currentLocale);
+
+  if (!shouldEnableRuntimeI18n(currentLocale)) {
+    disconnectObserver();
+    return;
+  }
+
+  // Process existing DOM once, then watch only when runtime translation is active.
+  processElement(document.body);
+  ensureObserver();
 }
 
 // Reload translations when locale changes
@@ -156,7 +177,13 @@ export async function reloadTranslations() {
   
   // Notify all registered callbacks
   reloadCallbacks.forEach(callback => callback());
-  
+
+  if (!shouldEnableRuntimeI18n(currentLocale)) {
+    disconnectObserver();
+    return;
+  }
+
+  ensureObserver();
   // Re-process entire DOM (will use stored original text)
   processElement(document.body);
 }
