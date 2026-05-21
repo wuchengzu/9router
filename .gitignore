@@ -47,8 +47,6 @@ next-env.d.ts
 .bin/*
 data/
 logs/*
-packages/cli/app/
-packages/cli/*.tgz
 source/*
 .cursor/*
 docs/*
