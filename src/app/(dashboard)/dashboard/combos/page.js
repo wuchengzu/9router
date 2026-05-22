@@ -7,10 +7,33 @@ import { CSS } from "@dnd-kit/utilities";
 import { restrictToVerticalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
 import { Card, Button, Modal, Input, CardSkeleton, ModelSelectModal, Toggle, ConfirmModal } from "@/shared/components";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
-import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider } from "@/shared/constants/providers";
+import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider, getProviderAlias, OAUTH_PROVIDERS, APIKEY_PROVIDERS, FREE_PROVIDERS, FREE_TIER_PROVIDERS, AI_PROVIDERS } from "@/shared/constants/providers";
+import { getModelsByProviderId } from "@/shared/constants/models";
 
 // Validate combo name: only a-z, A-Z, 0-9, -, _
 const VALID_NAME_REGEX = /^[a-zA-Z0-9_.\-]+$/;
+
+// Provider priority order for model sorting
+const PROVIDER_ORDER = [
+  ...Object.keys(OAUTH_PROVIDERS),
+  ...Object.keys(FREE_PROVIDERS),
+  ...Object.keys(FREE_TIER_PROVIDERS),
+  ...Object.keys(APIKEY_PROVIDERS),
+];
+const NO_AUTH_PROVIDER_IDS = Object.keys(FREE_PROVIDERS).filter(id => FREE_PROVIDERS[id].noAuth);
+
+// Normalize model ID for fuzzy grouping
+// Handles patterns like kimi-k2.5 ≈ kimi-k2p5, claude-sonnet-4-20250514 ≈ claude-sonnet-4
+function normalizeForGrouping(modelId) {
+  let s = modelId.toLowerCase();
+  // Remove date suffixes like -20250514
+  s = s.replace(/-\d{6,8}$/, "");
+  // Remove separators
+  s = s.replace(/[-_.]/g, "");
+  // Normalize p between digits (.5 ≈ p5 ≈ 5)
+  s = s.replace(/(\d)p(\d)/g, "$1$2");
+  return s;
+}
 
 export default function CombosPage() {
   const [combos, setCombos] = useState([]);
@@ -20,6 +43,13 @@ export default function CombosPage() {
   const [activeProviders, setActiveProviders] = useState([]);
   const [comboStrategies, setComboStrategies] = useState({});
   const [confirmState, setConfirmState] = useState(null);
+  const [createKey, setCreateKey] = useState(0);
+  const [autoCreating, setAutoCreating] = useState(false);
+  const [syncingIds, setSyncingIds] = useState(new Set());
+  const [resultState, setResultState] = useState(null);
+  const [modelAliases, setModelAliases] = useState({});
+  const [providerNodes, setProviderNodes] = useState([]);
+  const [customModels, setCustomModels] = useState([]);
   const { copied, copy } = useCopyToClipboard();
 
   useEffect(() => {
@@ -28,25 +58,198 @@ export default function CombosPage() {
 
   const fetchData = async () => {
     try {
-      const [combosRes, providersRes, settingsRes] = await Promise.all([
+      const [combosRes, providersRes, settingsRes, aliasesRes, nodesRes, customModelsRes] = await Promise.all([
         fetch("/api/combos"),
         fetch("/api/providers"),
         fetch("/api/settings"),
+        fetch("/api/models/alias"),
+        fetch("/api/provider-nodes"),
+        fetch("/api/models/custom"),
       ]);
       const combosData = await combosRes.json();
       const providersData = await providersRes.json();
       const settingsData = settingsRes.ok ? await settingsRes.json() : {};
-      
+
       // Only LLM combos here — webSearch/webFetch combos belong to media-providers/web
       if (combosRes.ok) setCombos((combosData.combos || []).filter(c => !c.kind));
       if (providersRes.ok) {
         setActiveProviders(providersData.connections || []);
       }
       setComboStrategies(settingsData.comboStrategies || {});
+      if (aliasesRes.ok) {
+        const ad = await aliasesRes.json();
+        setModelAliases(ad.aliases || {});
+      }
+      if (nodesRes.ok) {
+        const nd = await nodesRes.json();
+        setProviderNodes(nd.nodes || []);
+      }
+      if (customModelsRes.ok) {
+        const cd = await customModelsRes.json();
+        setCustomModels(cd.models || []);
+      }
     } catch (error) {
       console.log("Error fetching data:", error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Collect all available model values across all active providers
+  // Returns Map<normalizedKey, { canonicalId: string, models: string[] }>
+  const collectModelGroups = () => {
+    const allProviders = { ...OAUTH_PROVIDERS, ...FREE_PROVIDERS, ...FREE_TIER_PROVIDERS, ...APIKEY_PROVIDERS };
+    const activeConnectionIds = activeProviders.map(p => p.provider);
+    const providerIdsToShow = new Set([...activeConnectionIds, ...NO_AUTH_PROVIDER_IDS]);
+    const groups = new Map(); // normalizedKey → { canonicalId, models: [{ value, providerId, modelId }] }
+
+    providerIdsToShow.forEach((providerId) => {
+      const alias = getProviderAlias(providerId);
+      const providerInfo = allProviders[providerId];
+      if (!providerInfo) return;
+      const isCustom = isOpenAICompatibleProvider(providerId) || isAnthropicCompatibleProvider(providerId);
+
+      let providerModels = [];
+
+      if (providerInfo.passthroughModels) {
+        // Passthrough providers: get models from aliases
+        providerModels = Object.entries(modelAliases)
+          .filter(([, fullModel]) => fullModel.startsWith(`${alias}/`))
+          .map(([aliasName, fullModel]) => ({
+            id: fullModel.replace(`${alias}/`, ""),
+            value: fullModel,
+          }));
+      } else if (isCustom) {
+        const matchedNode = providerNodes.find(node => node.id === providerId);
+        const nodePrefix = matchedNode?.prefix || providerId;
+        providerModels = Object.entries(modelAliases)
+          .filter(([, fullModel]) => fullModel.startsWith(`${providerId}/`))
+          .map(([aliasName, fullModel]) => ({
+            id: fullModel.replace(`${providerId}/`, ""),
+            value: `${nodePrefix}/${fullModel.replace(`${providerId}/`, "")}`,
+          }));
+      } else {
+        const hardcoded = getModelsByProviderId(providerId);
+        const hardcodedIds = new Set(hardcoded.map(m => m.id));
+        const customFromAliases = Object.entries(modelAliases)
+          .filter(([aName, fullModel]) =>
+            fullModel.startsWith(`${alias}/`) &&
+            (hardcoded.length > 0 ? aName === fullModel.replace(`${alias}/`, "") : true) &&
+            !hardcodedIds.has(fullModel.replace(`${alias}/`, ""))
+          )
+          .map(([aName, fullModel]) => ({ id: fullModel.replace(`${alias}/`, ""), value: fullModel, isCustom: true }));
+        const customRegistered = customModels
+          .filter(m => m.providerAlias === alias && !hardcodedIds.has(m.id))
+          .map(m => ({ id: m.id, value: `${alias}/${m.id}`, isCustom: true }));
+        providerModels = [
+          ...hardcoded.filter(m => !m.type || m.type === "llm").map(m => ({ id: m.id, value: `${alias}/${m.id}` })),
+          ...customFromAliases,
+          ...customRegistered,
+        ];
+      }
+
+      providerModels.forEach(({ id: modelId, value }) => {
+        const normalized = normalizeForGrouping(modelId);
+        if (!groups.has(normalized)) {
+          groups.set(normalized, { canonicalId: modelId, models: [] });
+        }
+        const group = groups.get(normalized);
+        const providerOrder = PROVIDER_ORDER.indexOf(providerId);
+        // Prefer canonicalId from higher-priority provider; tiebreak by shorter id
+        const currentOrder = group.canonicalProviderOrder ?? 999;
+        if (providerOrder < currentOrder || (providerOrder === currentOrder && modelId.length < group.canonicalId.length)) {
+          group.canonicalId = modelId;
+          group.canonicalProviderOrder = providerOrder;
+        }
+        group.models.push({ value, providerId, modelId, providerOrder: providerOrder === -1 ? 999 : providerOrder });
+      });
+    });
+
+    // Sort models within each group by provider order, dedupe by value
+    groups.forEach((group) => {
+      group.models.sort((a, b) => a.providerOrder - b.providerOrder);
+      const seen = new Set();
+      group.models = group.models.filter(m => {
+        if (seen.has(m.value)) return false;
+        seen.add(m.value);
+        return true;
+      });
+    });
+
+    return groups;
+  };
+
+  const handleAutoCombos = async () => {
+    setAutoCreating(true);
+    try {
+      const groups = collectModelGroups();
+      const existingMap = new Map(combos.map(c => [c.name, c]));
+      const createdCombos = [];
+      const updatedCombos = [];
+
+      for (const [, group] of groups) {
+        if (group.models.length < 2) continue;
+        const name = group.canonicalId;
+        if (!VALID_NAME_REGEX.test(name)) continue;
+        if (existingMap.has(name)) continue;
+
+        const newValues = group.models.map(m => m.value);
+        const res = await fetch("/api/combos", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, models: newValues }),
+        });
+        if (res.ok) createdCombos.push({ name, models: newValues });
+      }
+
+      await fetchData();
+      setResultState({ type: "auto", createdCombos, updatedCombos });
+    } catch (error) {
+      console.log("Error auto-creating combos:", error);
+    } finally {
+      setAutoCreating(false);
+    }
+  };
+
+  const handleSyncCombo = async (combo) => {
+    setSyncingIds(prev => new Set([...prev, combo.id]));
+    try {
+      const groups = collectModelGroups();
+      const comboNormalized = normalizeForGrouping(combo.name);
+      let matchingGroup = groups.get(comboNormalized);
+      if (!matchingGroup) {
+        for (const [, group] of groups) {
+          if (normalizeForGrouping(group.canonicalId) === comboNormalized) {
+            matchingGroup = group;
+            break;
+          }
+        }
+      }
+      if (matchingGroup) {
+        const existingSet = new Set(combo.models);
+        const merged = [...combo.models];
+        const added = [];
+        for (const m of matchingGroup.models) {
+          if (!existingSet.has(m.value)) { merged.push(m.value); added.push(m.value); }
+        }
+        if (added.length > 0) {
+          await fetch(`/api/combos/${combo.id}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: combo.name, models: merged }),
+          });
+          await fetchData();
+          setResultState({ type: "sync", comboName: combo.name, added });
+        } else {
+          setResultState({ type: "sync", comboName: combo.name, added: [] });
+        }
+      } else {
+        setResultState({ type: "sync", comboName: combo.name, added: [], notFound: true });
+      }
+    } catch (error) {
+      console.log("Error syncing combo:", error);
+    } finally {
+      setSyncingIds(prev => new Set([...prev].filter(id => id !== combo.id)));
     }
   };
 
@@ -60,6 +263,7 @@ export default function CombosPage() {
       if (res.ok) {
         await fetchData();
         setShowCreateModal(false);
+        setCreateKey(k => k + 1);
       } else {
         const err = await res.json();
         alert(err.error || "Failed to create combo");
@@ -146,9 +350,14 @@ export default function CombosPage() {
             Create model combos with fallback support
           </p>
         </div>
-        <Button icon="add" onClick={() => setShowCreateModal(true)} className="w-full sm:w-auto">
-          Create Combo
-        </Button>
+        <div className="grid grid-cols-1 gap-2 sm:flex sm:w-auto">
+          <Button icon="auto_awesome" onClick={handleAutoCombos} disabled={autoCreating} variant="secondary" className="w-full sm:w-auto">
+            {autoCreating ? "Creating..." : "Auto Combos"}
+          </Button>
+          <Button icon="add" onClick={() => setShowCreateModal(true)} className="w-full sm:w-auto">
+            Create Combo
+          </Button>
+        </div>
       </div>
 
       {/* Combos List */}
@@ -172,9 +381,11 @@ export default function CombosPage() {
               key={combo.id}
               combo={combo}
               copied={copied}
+              syncing={syncingIds.has(combo.id)}
               onCopy={copy}
               onEdit={() => setEditingCombo(combo)}
               onDelete={() => handleDelete(combo.id)}
+              onSync={() => handleSyncCombo(combo)}
               roundRobinEnabled={comboStrategies[combo.name]?.fallbackStrategy === "round-robin"}
               onToggleRoundRobin={(enabled) => handleToggleRoundRobin(combo.name, enabled)}
             />
@@ -184,7 +395,7 @@ export default function CombosPage() {
 
       {/* Create Modal - Use key to force remount and reset state */}
       <ComboFormModal
-        key="create"
+        key={`create-${createKey}`}
         isOpen={showCreateModal}
         onClose={() => setShowCreateModal(false)}
         onSave={handleCreate}
@@ -210,11 +421,92 @@ export default function CombosPage() {
         message={confirmState?.message}
         variant="danger"
       />
+
+      {/* Result Modal */}
+      {resultState && (
+        <Modal
+          isOpen={!!resultState}
+          onClose={() => setResultState(null)}
+          title={resultState.type === "auto" ? "Auto Combos Result" : `Sync: ${resultState.comboName}`}
+        >
+          <div className="flex flex-col gap-3 max-h-[60vh] overflow-y-auto">
+            {resultState.type === "auto" && (
+              <>
+                {resultState.createdCombos.length > 0 && (
+                  <div>
+                    <p className="text-sm font-medium text-emerald-500 mb-1.5">
+                      Created {resultState.createdCombos.length} combo(s)
+                    </p>
+                    <div className="flex flex-col gap-1">
+                      {resultState.createdCombos.map((c) => (
+                        <div key={c.name} className="flex flex-col gap-0.5 rounded-lg bg-black/[0.02] dark:bg-white/[0.02] px-3 py-1.5">
+                          <code className="font-mono text-xs font-medium">{c.name}</code>
+                          <div className="flex flex-wrap gap-1">
+                            {c.models.slice(0, 4).map((m) => (
+                              <code key={m} className="text-[10px] text-text-muted bg-black/5 dark:bg-white/5 px-1 py-0.5 rounded">{m}</code>
+                            ))}
+                            {c.models.length > 4 && <span className="text-[10px] text-text-muted">+{c.models.length - 4} more</span>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {resultState.updatedCombos.length > 0 && (
+                  <div>
+                    <p className="text-sm font-medium text-blue-500 mb-1.5">
+                      Updated {resultState.updatedCombos.length} combo(s)
+                    </p>
+                    <div className="flex flex-col gap-1">
+                      {resultState.updatedCombos.map((c) => (
+                        <div key={c.name} className="flex flex-col gap-0.5 rounded-lg bg-black/[0.02] dark:bg-white/[0.02] px-3 py-1.5">
+                          <code className="font-mono text-xs font-medium">{c.name}</code>
+                          <div className="flex flex-wrap gap-1">
+                            {c.added.map((m) => (
+                              <code key={m} className="text-[10px] text-emerald-500 bg-emerald-500/10 px-1 py-0.5 rounded">+{m}</code>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {resultState.createdCombos.length === 0 && resultState.updatedCombos.length === 0 && (
+                  <p className="text-sm text-text-muted py-2">No new combos to create or update.</p>
+                )}
+              </>
+            )}
+            {resultState.type === "sync" && (
+              <>
+                {resultState.notFound ? (
+                  <p className="text-sm text-text-muted py-2">No matching models found for this combo name.</p>
+                ) : resultState.added.length > 0 ? (
+                  <div>
+                    <p className="text-sm font-medium text-emerald-500 mb-1.5">
+                      Added {resultState.added.length} model(s)
+                    </p>
+                    <div className="flex flex-wrap gap-1">
+                      {resultState.added.map((m) => (
+                        <code key={m} className="text-xs text-emerald-500 bg-emerald-500/10 px-1.5 py-0.5 rounded">+{m}</code>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-sm text-text-muted py-2">Already up to date.</p>
+                )}
+              </>
+            )}
+          </div>
+          <div className="flex justify-end mt-4">
+            <Button size="sm" onClick={() => setResultState(null)}>OK</Button>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
 
-function ComboCard({ combo, copied, onCopy, onEdit, onDelete, roundRobinEnabled, onToggleRoundRobin }) {
+function ComboCard({ combo, copied, syncing, onCopy, onEdit, onDelete, onSync, roundRobinEnabled, onToggleRoundRobin }) {
   return (
     <Card padding="sm" className="group">
       <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -253,7 +545,16 @@ function ComboCard({ combo, copied, onCopy, onEdit, onDelete, roundRobinEnabled,
             />
           </div>
 
-          <div className="grid grid-cols-3 gap-1 sm:flex">
+          <div className="grid grid-cols-4 gap-1 sm:flex">
+            <button
+              onClick={onSync}
+              disabled={syncing}
+              className={`flex flex-col items-center rounded px-2 py-1 transition-colors ${syncing ? "text-primary animate-pulse" : "text-text-muted hover:bg-black/5 hover:text-primary dark:hover:bg-white/5"}`}
+              title="Sync models from available providers"
+            >
+              <span className="material-symbols-outlined text-[18px]">{syncing ? "hourglass_top" : "sync"}</span>
+              <span className="text-[10px] leading-tight">Sync</span>
+            </button>
             <button
               onClick={(e) => { e.stopPropagation(); onCopy(combo.name, `combo-${combo.id}`); }}
               className="flex flex-col items-center rounded px-2 py-1 text-text-muted transition-colors hover:bg-black/5 hover:text-primary dark:hover:bg-white/5"
@@ -578,6 +879,7 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, kindF
         onDeselect={handleDeselectModel}
         activeProviders={activeProviders}
         modelAliases={modelAliases}
+        initialSearch={name.trim()}
         title="Add Model to Combo"
         kindFilter={kindFilter}
         addedModelValues={models}
