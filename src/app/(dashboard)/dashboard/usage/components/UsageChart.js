@@ -10,7 +10,8 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  Legend,
+  ReferenceLine,
+  ReferenceDot,
 } from "recharts";
 import Card from "@/shared/components/Card";
 
@@ -21,6 +22,11 @@ const fmtTokens = (n) => {
 };
 
 const fmtCost = (n) => `$${(n || 0).toFixed(4)}`;
+
+const getCurrentHourLabel = () => {
+  const now = new Date();
+  return now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false }).replace(/:\d{2}$/, ":00");
+};
 
 export default function UsageChart({ period = "7d" }) {
   const [data, setData] = useState([]);
@@ -47,6 +53,9 @@ export default function UsageChart({ period = "7d" }) {
   }, [fetchData]);
 
   const hasData = data.some((d) => d.tokens > 0 || d.cost > 0);
+  const isToday = period === "today";
+  const nowHourLabel = isToday ? getCurrentHourLabel() : null;
+  const nowPoint = isToday ? data.find((d) => d.label === nowHourLabel) : null;
 
   return (
     <Card className="flex min-w-0 flex-col gap-3 p-3 sm:p-4">
@@ -108,6 +117,18 @@ export default function UsageChart({ period = "7d" }) {
                 name === "tokens" ? [fmtTokens(value), "Tokens"] : [fmtCost(value), "Cost"]
               }
             />
+            {isToday && nowPoint && (
+              <>
+                <ReferenceLine
+                  x={nowHourLabel}
+                  stroke="#6366f1"
+                  strokeOpacity={0.35}
+                  strokeWidth={1}
+                  strokeDasharray="4 4"
+                  ifOverflow="visible"
+                />
+              </>
+            )}
             {viewMode === "tokens" ? (
               <Area
                 type="monotone"
