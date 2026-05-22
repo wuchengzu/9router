@@ -37,6 +37,11 @@ function TimeAgo({ timestamp }) {
   return <>{timeAgo(timestamp)}</>;
 }
 
+function fmtSigned(n) {
+  const abs = Math.abs(n || 0);
+  return `${n >= 0 ? "+" : "-"}${fmt(abs)}`;
+}
+
 function RecentRequests({ requests = [] }) {
   return (
     <Card className="flex min-w-0 flex-col overflow-hidden" padding="sm" style={{ height: 480 }}>
@@ -54,7 +59,7 @@ function RecentRequests({ requests = [] }) {
               <tr className="border-b border-border">
                 <th className="py-1.5 text-left font-semibold text-text-muted w-2"></th>
                 <th className="py-1.5 text-left font-semibold text-text-muted">Model</th>
-                <th className="py-1.5 text-right font-semibold text-text-muted whitespace-nowrap">In / Out</th>
+                <th className="py-1.5 text-right font-semibold text-text-muted whitespace-nowrap">In / Out / Delta</th>
                 <th className="py-1.5 text-right font-semibold text-text-muted">When</th>
               </tr>
             </thead>
@@ -71,6 +76,10 @@ function RecentRequests({ requests = [] }) {
                       <span className="text-primary">{fmt(r.promptTokens)}↑</span>
                       {" "}
                       <span className="text-success">{fmt(r.completionTokens)}↓</span>
+                      {" "}
+                      <span className="text-text-muted">
+                        Δ{fmtSigned((r.promptTokens || 0) - (r.cacheInputTokens || 0))}
+                      </span>
                     </td>
                     <td className="py-1.5 text-right text-text-muted whitespace-nowrap"><TimeAgo timestamp={r.timestamp} /></td>
                   </tr>
@@ -91,7 +100,17 @@ function sortData(dataMap, pendingMap = {}, sortBy, sortOrder) {
       const totalCost = data.cost || 0;
       const inputCost = totalTokens > 0 ? (data.promptTokens || 0) * (totalCost / totalTokens) : 0;
       const outputCost = totalTokens > 0 ? (data.completionTokens || 0) * (totalCost / totalTokens) : 0;
-      return { ...data, key, totalTokens, totalCost, inputCost, outputCost, pending: pendingMap[key] || 0 };
+      return {
+        ...data,
+        key,
+        totalTokens,
+        totalCost,
+        inputCost,
+        outputCost,
+        cacheInputTokens: data.cacheInputTokens || 0,
+        cacheOutputTokens: data.cacheOutputTokens || 0,
+        pending: pendingMap[key] || 0,
+      };
     })
     .sort((a, b) => {
       let valA = a[sortBy];
@@ -122,7 +141,19 @@ function groupDataByKey(data, keyField) {
     if (!groups[gk]) {
       groups[gk] = {
         groupKey: gk,
-        summary: { requests: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, cost: 0, inputCost: 0, outputCost: 0, lastUsed: null, pending: 0 },
+        summary: {
+          requests: 0,
+          promptTokens: 0,
+          completionTokens: 0,
+          cacheInputTokens: 0,
+          cacheOutputTokens: 0,
+          totalTokens: 0,
+          cost: 0,
+          inputCost: 0,
+          outputCost: 0,
+          lastUsed: null,
+          pending: 0,
+        },
         items: [],
       };
     }
@@ -134,6 +165,8 @@ function groupDataByKey(data, keyField) {
     s.cost += item.cost || 0;
     s.inputCost += item.inputCost || 0;
     s.outputCost += item.outputCost || 0;
+    s.cacheInputTokens += item.cacheInputTokens || 0;
+    s.cacheOutputTokens += item.cacheOutputTokens || 0;
     s.pending += item.pending || 0;
     if (item.lastUsed && (!s.lastUsed || new Date(item.lastUsed) > new Date(s.lastUsed))) {
       s.lastUsed = item.lastUsed;
@@ -182,6 +215,7 @@ const TABLE_OPTIONS = [
 ];
 
 const PERIODS = [
+  { value: "today", label: "Today" },
   { value: "24h", label: "24h" },
   { value: "7d", label: "7D" },
   { value: "30d", label: "30D" },
@@ -192,16 +226,16 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const sortBy = searchParams.get("sortBy") || "rawModel";
-  const sortOrder = searchParams.get("sortOrder") || "asc";
+  const sortBy = searchParams.get("sortBy") || "totalTokens";
+  const sortOrder = searchParams.get("sortOrder") || "desc";
 
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [fetching, setFetching] = useState(false);
   const [tableView, setTableView] = useState("model");
-  const [viewMode, setViewMode] = useState("costs");
+  const [viewMode, setViewMode] = useState("tokens");
   const [providers, setProviders] = useState([]);
-  const [periodLocal, setPeriodLocal] = useState("7d");
+  const [periodLocal, setPeriodLocal] = useState("today");
   const period = periodProp ?? periodLocal;
   const setPeriod = setPeriodProp ?? setPeriodLocal;
 
@@ -412,7 +446,7 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
       {/* Period selector (hidden when controlled by parent) */}
       {!hidePeriodSelector && (
         <div className="flex w-full items-center gap-2 sm:w-auto sm:self-end">
-          <div className="grid flex-1 grid-cols-4 items-center gap-1 rounded-lg border border-border bg-bg-subtle p-1 sm:flex sm:flex-none">
+          <div className="grid flex-1 grid-cols-5 items-center gap-1 rounded-lg border border-border bg-bg-subtle p-1 sm:flex sm:flex-none">
             {PERIODS.map((p) => (
               <button
                 key={p.value}
@@ -455,7 +489,8 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
           <select
             value={tableView}
             onChange={(e) => setTableView(e.target.value)}
-            className="w-full rounded-lg border border-border bg-bg-subtle px-3 py-1.5 text-sm font-medium text-text focus:outline-none focus:ring-2 focus:ring-primary/50 sm:w-auto"
+            className="w-full rounded-lg border border-border bg-surface px-3 py-1.5 text-sm font-medium text-text-main focus:outline-none focus:ring-2 focus:ring-primary/50 sm:w-auto"
+            style={{ colorScheme: 'auto' }}
           >
             {TABLE_OPTIONS.map((opt) => (
               <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -478,6 +513,7 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
         </div>
         {loading ? spinner : activeTableConfig && (
           <UsageTable
+            key={activeTableConfig.storageKey}
             title=""
             columns={activeTableConfig.columns}
             groupedData={activeTableConfig.groupedData}

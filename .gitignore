@@ -15,7 +15,9 @@
 
 # next.js
 /.next/
+/.next-cli-build/
 /out/
+cli/.build-home/
 product
 # production
 /build
@@ -52,7 +54,6 @@ source/*
 docs/*
 !docs/ARCHITECTURE.md
 test/*
-bin/*
 open-sse/test/*
 RM.vn.md
 RM.md
@@ -72,3 +73,7 @@ ecosystem.config.*
 
 scripts/agSniffer/*
 gitbooks/*
+gitbook/README.md
+
+cli/9router-*.tgz
+.claude/
