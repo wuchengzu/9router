@@ -25,3 +25,22 @@ test("provider model filter reaches compatible provider model list", () => {
     "compatible section must filter by model id"
   );
 });
+
+test("auto combo and sync model groups ignore disabled provider models", () => {
+  assert.ok(
+    /const\s+\[disabledModels,\s*setDisabledModels\]\s*=\s*useState\(\{\}\)/.test(combosPage),
+    "combos page must keep disabled model state"
+  );
+  assert.ok(
+    /fetch\("\/api\/models\/disabled"\)/.test(combosPage),
+    "combos page must load disabled provider models before grouping"
+  );
+  assert.ok(
+    /getDisabledIdsForProvider/.test(combosPage),
+    "combos page must resolve disabled ids by provider alias and provider id"
+  );
+  assert.ok(
+    /providerModels\s*=\s*providerModels\.filter\(\(\{\s*id\s*:\s*modelId\s*\}\)\s*=>\s*!disabledIds\.has\(modelId\)\)/.test(combosPage),
+    "collectModelGroups must remove disabled provider models before auto combos and sync"
+  );
+});

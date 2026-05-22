@@ -50,6 +50,7 @@ export default function CombosPage() {
   const [modelAliases, setModelAliases] = useState({});
   const [providerNodes, setProviderNodes] = useState([]);
   const [customModels, setCustomModels] = useState([]);
+  const [disabledModels, setDisabledModels] = useState({});
   const { copied, copy } = useCopyToClipboard();
 
   useEffect(() => {
@@ -58,13 +59,14 @@ export default function CombosPage() {
 
   const fetchData = async () => {
     try {
-      const [combosRes, providersRes, settingsRes, aliasesRes, nodesRes, customModelsRes] = await Promise.all([
+      const [combosRes, providersRes, settingsRes, aliasesRes, nodesRes, customModelsRes, disabledModelsRes] = await Promise.all([
         fetch("/api/combos"),
         fetch("/api/providers"),
         fetch("/api/settings"),
         fetch("/api/models/alias"),
         fetch("/api/provider-nodes"),
         fetch("/api/models/custom"),
+        fetch("/api/models/disabled"),
       ]);
       const combosData = await combosRes.json();
       const providersData = await providersRes.json();
@@ -88,11 +90,23 @@ export default function CombosPage() {
         const cd = await customModelsRes.json();
         setCustomModels(cd.models || []);
       }
+      if (disabledModelsRes.ok) {
+        const dd = await disabledModelsRes.json();
+        setDisabledModels(dd.disabled || {});
+      }
     } catch (error) {
       console.log("Error fetching data:", error);
     } finally {
       setLoading(false);
     }
+  };
+
+  const getDisabledIdsForProvider = (providerId) => {
+    const alias = getProviderAlias(providerId);
+    return new Set([
+      ...(disabledModels[alias] || []),
+      ...(disabledModels[providerId] || []),
+    ]);
   };
 
   // Collect all available model values across all active providers
@@ -146,6 +160,11 @@ export default function CombosPage() {
           ...customFromAliases,
           ...customRegistered,
         ];
+      }
+
+      const disabledIds = getDisabledIdsForProvider(providerId);
+      if (disabledIds.size > 0) {
+        providerModels = providerModels.filter(({ id: modelId }) => !disabledIds.has(modelId));
       }
 
       providerModels.forEach(({ id: modelId, value }) => {
