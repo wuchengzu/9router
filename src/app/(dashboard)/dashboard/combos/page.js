@@ -45,6 +45,7 @@ export default function CombosPage() {
   const [confirmState, setConfirmState] = useState(null);
   const [createKey, setCreateKey] = useState(0);
   const [autoCreating, setAutoCreating] = useState(false);
+  const [syncingAll, setSyncingAll] = useState(false);
   const [syncingIds, setSyncingIds] = useState(new Set());
   const [resultState, setResultState] = useState(null);
   const [modelAliases, setModelAliases] = useState({});
@@ -113,19 +114,21 @@ export default function CombosPage() {
   // Returns Map<normalizedKey, { canonicalId: string, models: string[] }>
   const collectModelGroups = () => {
     const allProviders = { ...OAUTH_PROVIDERS, ...FREE_PROVIDERS, ...FREE_TIER_PROVIDERS, ...APIKEY_PROVIDERS };
-    const activeConnectionIds = activeProviders.map(p => p.provider);
+    const activeConnectionIds = activeProviders
+      .filter(p => p.isActive !== false)
+      .map(p => p.provider);
     const providerIdsToShow = new Set([...activeConnectionIds, ...NO_AUTH_PROVIDER_IDS]);
     const groups = new Map(); // normalizedKey → { canonicalId, models: [{ value, providerId, modelId }] }
 
     providerIdsToShow.forEach((providerId) => {
       const alias = getProviderAlias(providerId);
-      const providerInfo = allProviders[providerId];
-      if (!providerInfo) return;
       const isCustom = isOpenAICompatibleProvider(providerId) || isAnthropicCompatibleProvider(providerId);
+      const providerInfo = allProviders[providerId];
+      if (!providerInfo && !isCustom) return;
 
       let providerModels = [];
 
-      if (providerInfo.passthroughModels) {
+      if (providerInfo?.passthroughModels) {
         // Passthrough providers: get models from aliases
         providerModels = Object.entries(modelAliases)
           .filter(([, fullModel]) => fullModel.startsWith(`${alias}/`))
@@ -230,45 +233,109 @@ export default function CombosPage() {
     }
   };
 
+  function buildComboSyncPlan(combo, groups) {
+    const availableModelValues = new Set();
+    groups.forEach(group => {
+      group.models.forEach(m => availableModelValues.add(m.value));
+    });
+
+    const comboNormalized = normalizeForGrouping(combo.name);
+    let matchingGroup = groups.get(comboNormalized);
+    if (!matchingGroup) {
+      for (const [, group] of groups) {
+        if (normalizeForGrouping(group.canonicalId) === comboNormalized) {
+          matchingGroup = group;
+          break;
+        }
+      }
+    }
+
+    if (matchingGroup) {
+      const existingSet = new Set(combo.models);
+      const availableValues = new Set(matchingGroup.models.map(m => m.value));
+      const added = [];
+      const removed = combo.models.filter(m => !availableValues.has(m));
+      for (const m of matchingGroup.models) {
+        if (!existingSet.has(m.value)) added.push(m.value);
+      }
+      const synced = matchingGroup.models.map(m => m.value);
+      return {
+        added,
+        removed,
+        synced,
+        changed: added.length > 0 || removed.length > 0,
+        notFound: false,
+      };
+    }
+
+    const removed = combo.models.filter(m => !availableModelValues.has(m));
+    return {
+      added: [],
+      removed,
+      synced: combo.models.filter(m => availableModelValues.has(m)),
+      changed: removed.length > 0,
+      notFound: removed.length === 0,
+    };
+  }
+
   const handleSyncCombo = async (combo) => {
     setSyncingIds(prev => new Set([...prev, combo.id]));
     try {
       const groups = collectModelGroups();
-      const comboNormalized = normalizeForGrouping(combo.name);
-      let matchingGroup = groups.get(comboNormalized);
-      if (!matchingGroup) {
-        for (const [, group] of groups) {
-          if (normalizeForGrouping(group.canonicalId) === comboNormalized) {
-            matchingGroup = group;
-            break;
-          }
-        }
+      const plan = buildComboSyncPlan(combo, groups);
+      if (plan.changed) {
+        await fetch(`/api/combos/${combo.id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: combo.name, models: plan.synced }),
+        });
+        await fetchData();
       }
-      if (matchingGroup) {
-        const existingSet = new Set(combo.models);
-        const merged = [...combo.models];
-        const added = [];
-        for (const m of matchingGroup.models) {
-          if (!existingSet.has(m.value)) { merged.push(m.value); added.push(m.value); }
-        }
-        if (added.length > 0) {
-          await fetch(`/api/combos/${combo.id}`, {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ name: combo.name, models: merged }),
-          });
-          await fetchData();
-          setResultState({ type: "sync", comboName: combo.name, added });
-        } else {
-          setResultState({ type: "sync", comboName: combo.name, added: [] });
-        }
-      } else {
-        setResultState({ type: "sync", comboName: combo.name, added: [], notFound: true });
-      }
+      setResultState({
+        type: "sync",
+        comboName: combo.name,
+        added: plan.added,
+        removed: plan.removed,
+        notFound: plan.notFound,
+      });
     } catch (error) {
       console.log("Error syncing combo:", error);
     } finally {
       setSyncingIds(prev => new Set([...prev].filter(id => id !== combo.id)));
+    }
+  };
+
+  const handleSyncAll = async () => {
+    setSyncingAll(true);
+    setSyncingIds(new Set(combos.map(c => c.id)));
+    try {
+      const groups = collectModelGroups();
+      const updatedCombos = [];
+      let unchangedCount = 0;
+
+      for (const combo of combos) {
+        const plan = buildComboSyncPlan(combo, groups);
+        if (plan.changed) {
+          const res = await fetch(`/api/combos/${combo.id}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: combo.name, models: plan.synced }),
+          });
+          if (res.ok) {
+            updatedCombos.push({ name: combo.name, added: plan.added, removed: plan.removed });
+          }
+        } else {
+          unchangedCount += 1;
+        }
+      }
+
+      await fetchData();
+      setResultState({ type: "syncAll", updatedCombos, unchangedCount });
+    } catch (error) {
+      console.log("Error syncing all combos:", error);
+    } finally {
+      setSyncingAll(false);
+      setSyncingIds(new Set());
     }
   };
 
@@ -373,6 +440,9 @@ export default function CombosPage() {
           <Button icon="auto_awesome" onClick={handleAutoCombos} disabled={autoCreating} variant="secondary" className="w-full sm:w-auto">
             {autoCreating ? "Creating..." : "Auto Combos"}
           </Button>
+          <Button icon="sync" onClick={handleSyncAll} disabled={syncingAll || combos.length === 0} variant="secondary" className="w-full sm:w-auto">
+            {syncingAll ? "Syncing..." : "Sync All"}
+          </Button>
           <Button icon="add" onClick={() => setShowCreateModal(true)} className="w-full sm:w-auto">
             Create Combo
           </Button>
@@ -446,7 +516,7 @@ export default function CombosPage() {
         <Modal
           isOpen={!!resultState}
           onClose={() => setResultState(null)}
-          title={resultState.type === "auto" ? "Auto Combos Result" : `Sync: ${resultState.comboName}`}
+          title={resultState.type === "auto" ? "Auto Combos Result" : resultState.type === "syncAll" ? "Sync All Result" : `Sync: ${resultState.comboName}`}
         >
           <div className="flex flex-col gap-3 max-h-[60vh] overflow-y-auto">
             {resultState.type === "auto" && (
@@ -499,19 +569,66 @@ export default function CombosPage() {
               <>
                 {resultState.notFound ? (
                   <p className="text-sm text-text-muted py-2">No matching models found for this combo name.</p>
-                ) : resultState.added.length > 0 ? (
+                ) : resultState.added.length > 0 || resultState.removed?.length > 0 ? (
+                  <div className="flex flex-col gap-3">
+                    {resultState.added.length > 0 && (
+                      <div>
+                        <p className="text-sm font-medium text-emerald-500 mb-1.5">
+                          Added {resultState.added.length} model(s)
+                        </p>
+                        <div className="flex flex-wrap gap-1">
+                          {resultState.added.map((m) => (
+                            <code key={m} className="text-xs text-emerald-500 bg-emerald-500/10 px-1.5 py-0.5 rounded">+{m}</code>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {resultState.removed?.length > 0 && (
+                      <div>
+                        <p className="text-sm font-medium text-red-500 mb-1.5">
+                          Removed {resultState.removed.length} unavailable model(s)
+                        </p>
+                        <div className="flex flex-wrap gap-1">
+                          {resultState.removed.map((m) => (
+                            <code key={m} className="text-xs text-red-500 bg-red-500/10 px-1.5 py-0.5 rounded">-{m}</code>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-sm text-text-muted py-2">Already up to date.</p>
+                )}
+              </>
+            )}
+            {resultState.type === "syncAll" && (
+              <>
+                {resultState.updatedCombos.length > 0 ? (
                   <div>
-                    <p className="text-sm font-medium text-emerald-500 mb-1.5">
-                      Added {resultState.added.length} model(s)
+                    <p className="text-sm font-medium text-blue-500 mb-1.5">
+                      Updated {resultState.updatedCombos.length} combo(s)
                     </p>
-                    <div className="flex flex-wrap gap-1">
-                      {resultState.added.map((m) => (
-                        <code key={m} className="text-xs text-emerald-500 bg-emerald-500/10 px-1.5 py-0.5 rounded">+{m}</code>
+                    <div className="flex flex-col gap-1">
+                      {resultState.updatedCombos.map((c) => (
+                        <div key={c.name} className="flex flex-col gap-1 rounded-lg bg-black/[0.02] dark:bg-white/[0.02] px-3 py-1.5">
+                          <code className="font-mono text-xs font-medium">{c.name}</code>
+                          <div className="flex flex-wrap gap-1">
+                            {c.added.map((m) => (
+                              <code key={`add-${m}`} className="text-[10px] text-emerald-500 bg-emerald-500/10 px-1 py-0.5 rounded">+{m}</code>
+                            ))}
+                            {c.removed.map((m) => (
+                              <code key={`remove-${m}`} className="text-[10px] text-red-500 bg-red-500/10 px-1 py-0.5 rounded">-{m}</code>
+                            ))}
+                          </div>
+                        </div>
                       ))}
                     </div>
                   </div>
                 ) : (
-                  <p className="text-sm text-text-muted py-2">Already up to date.</p>
+                  <p className="text-sm text-text-muted py-2">All combos are already up to date.</p>
+                )}
+                {resultState.unchangedCount > 0 && (
+                  <p className="text-xs text-text-muted">{resultState.unchangedCount} combo(s) unchanged.</p>
                 )}
               </>
             )}
