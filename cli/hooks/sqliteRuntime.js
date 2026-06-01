@@ -40,6 +40,22 @@ function ensureRuntimeDir() {
   return dir;
 }
 
+function ensureRuntimeDependency(name, version) {
+  const dir = ensureRuntimeDir();
+  const pkgPath = path.join(dir, "package.json");
+  let pkg = {};
+  try {
+    pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+  } catch {
+    pkg = { name: "9router-runtime", version: "1.0.0", private: true };
+  }
+  pkg.dependencies = pkg.dependencies || {};
+  if (pkg.dependencies[name] !== version) {
+    pkg.dependencies[name] = version;
+    fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
+  }
+}
+
 function hasModule(name) {
   return fs.existsSync(path.join(getRuntimeNodeModules(), name, "package.json"));
 }
@@ -74,8 +90,12 @@ function summarizeNpmError(stderr = "") {
   return lastLine ? lastLine.slice(0, 200) : "Unknown error";
 }
 
+function buildNpmInstallArgs(pkgs, extraArgs = []) {
+  return ["install", ...pkgs, "--no-audit", "--no-fund", "--prefer-online", ...extraArgs];
+}
+
 function runNpmInstall({ cwd, pkgs, extraArgs = [], timeout = 180000 }) {
-  const args = ["install", ...pkgs, "--no-audit", "--no-fund", "--prefer-online", ...extraArgs];
+  const args = buildNpmInstallArgs(pkgs, extraArgs);
   const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
   const res = spawnSync(npmCmd, args, {
     cwd,
@@ -89,9 +109,8 @@ function runNpmInstall({ cwd, pkgs, extraArgs = [], timeout = 180000 }) {
 
 function npmInstall(pkgs, opts = {}) {
   const cwd = ensureRuntimeDir();
-  const extra = opts.optional ? ["--no-save"] : [];
   if (!opts.silent) console.log("⏳ Installing SQLite engine (first run)...");
-  const res = runNpmInstall({ cwd, pkgs, extraArgs: extra, timeout: opts.timeout || 180000 });
+  const res = runNpmInstall({ cwd, pkgs, timeout: opts.timeout || 180000 });
   if (!res.ok && !opts.silent) {
     const reason = summarizeNpmError(res.stderr);
     console.warn("⚠️  SQLite engine install failed — using fallback");
@@ -109,10 +128,12 @@ function ensureSqliteRuntime({ silent = false } = {}) {
 
   const needBetterSqlite = !hasModule("better-sqlite3") || !isBetterSqliteBinaryValid();
   if (!needBetterSqlite) {
+    ensureRuntimeDependency("better-sqlite3", BETTER_SQLITE3_VERSION);
     if (!silent) console.log("✅ SQLite engine ready");
     return { betterSqlite: true };
   }
 
+  ensureRuntimeDependency("better-sqlite3", BETTER_SQLITE3_VERSION);
   const ok = npmInstall([`better-sqlite3@${BETTER_SQLITE3_VERSION}`], { optional: true, silent });
   return {
     betterSqlite: ok && hasModule("better-sqlite3") && isBetterSqliteBinaryValid(),
@@ -130,7 +151,9 @@ function buildEnvWithRuntime(baseEnv = process.env) {
 }
 
 module.exports = {
+  buildNpmInstallArgs,
   ensureSqliteRuntime,
+  ensureRuntimeDependency,
   buildEnvWithRuntime,
   getRuntimeDir,
   getRuntimeNodeModules,

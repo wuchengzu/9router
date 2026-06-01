@@ -47,6 +47,8 @@ next-env.d.ts
 .bin/*
 data/
 logs/*
+packages/cli/app/
+packages/cli/*.tgz
 source/*
 .cursor/*
 docs/*
@@ -72,3 +74,6 @@ ecosystem.config.*
 scripts/agSniffer/*
 gitbooks/*
 gitbook/README.md
+
+cli/9router-*.tgz
+.claude/

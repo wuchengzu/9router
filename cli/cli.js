@@ -45,15 +45,9 @@ function createSpinner(text) {
 const pkg = require("./package.json");
 const { ensureSqliteRuntime, buildEnvWithRuntime } = require("./hooks/sqliteRuntime");
 const { ensureTrayRuntime } = require("./hooks/trayRuntime");
+const { releaseInteractiveStdin, spawnTrayBackgroundProcess } = require("./src/cli/backgroundHandoff");
+const { shouldSkipUpdateCheck, waitForServerReady } = require("./src/cli/startup");
 const args = process.argv.slice(2);
-
-// Self-heal SQLite runtime deps (sql.js + better-sqlite3) into ~/.9router/runtime
-// so the server can resolve them via NODE_PATH. Best-effort — sql.js is required,
-// better-sqlite3 is optional. Logs to stderr only on failure.
-try { ensureSqliteRuntime({ silent: true }); } catch {}
-
-// Self-heal tray runtime (systray for macOS/Linux only). Windows skipped.
-try { ensureTrayRuntime({ silent: true }); } catch {}
 
 // Configuration constants
 const APP_NAME = pkg.name; // Use from package.json
@@ -104,6 +98,9 @@ Options:
   --skip-update       Skip auto-update check
   -h, --help          Show this help message
   -v, --version       Show version
+
+Environment:
+  NINEROUTER_NO_UPDATE_CHECK=1   Disable auto-update check
 `);
     process.exit(0);
   } else if (args[i] === "--version" || args[i] === "-v") {
@@ -117,6 +114,11 @@ if (skipUpdate && !trayMode && !process.stdin.isTTY) {
   trayMode = true;
   process.env.TRAY_MODE = "1";
 }
+
+// Self-heal runtime deps after immediate-exit args so `--help`/`--version`
+// stay instant. These checks are cheap when deps are already installed.
+try { ensureSqliteRuntime({ silent: true }); } catch {}
+try { ensureTrayRuntime({ silent: true }); } catch {}
 
 // Always use Node.js runtime with absolute path
 const RUNTIME = process.execPath;
@@ -404,7 +406,7 @@ function isRestrictedEnvironment() {
 // Check if new version available, return latest version or null
 function checkForUpdate() {
   return new Promise((resolve) => {
-    if (skipUpdate) {
+    if (shouldSkipUpdateCheck(process.env, skipUpdate)) {
       resolve(null);
       return;
     }
@@ -480,13 +482,16 @@ if (!fs.existsSync(serverPath)) {
   process.exit(1);
 }
 
-// Check for updates FIRST, then start server
-checkForUpdate().then((latestVersion) => {
-  killAllAppProcesses(port).then(() => {
-    return killProcessOnPort(port);
-  }).then(() => {
-    startServer(latestVersion);
-  });
+let latestVersion = null;
+
+checkForUpdate().then((version) => {
+  latestVersion = version;
+});
+
+killAllAppProcesses(port).then(() => {
+  return killProcessOnPort(port);
+}).then(() => {
+  startServer(() => latestVersion);
 });
 
 // Show interface selection menu
@@ -537,7 +542,7 @@ async function showInterfaceMenu(latestVersion) {
 const MAX_RESTARTS = 2;
 const RESTART_RESET_MS = 30000; // Reset counter if alive > 30s
 
-function startServer(latestVersion) {
+function startServer(getLatestVersion) {
   const displayHost = host === DEFAULT_HOST ? "localhost" : host;
   const url = `http://${displayHost}:${port}/dashboard`;
 
@@ -644,6 +649,13 @@ function startServer(latestVersion) {
     }
   };
 
+  const waitForReady = () => waitForServerReady({
+    host: displayHost,
+    port,
+    timeoutMs: 10000,
+    intervalMs: 100
+  });
+
   // Tray-only mode: no TUI, just tray icon
   if (trayMode) {
     // Ignore SIGHUP so macOS terminal close doesn't kill the background tray process
@@ -653,22 +665,24 @@ function startServer(latestVersion) {
     console.log(`\n🚀 ${pkg.name} v${pkg.version}`);
     console.log(`Server: http://${displayHost}:${port}`);
 
-    setTimeout(() => {
+    waitForReady().then(() => {
       initTrayIcon();
       console.log("\n💡 Router is now running in system tray. Close this terminal if you want.");
       console.log("   Right-click tray icon to open dashboard or quit.\n");
-    }, 2000);
+    });
 
     return;
   }
 
   // Wait for server to be ready, then show interface menu loop + tray
-  setTimeout(async () => {
+  (async () => {
+    await waitForReady();
     // Start tray icon alongside TUI
     initTrayIcon();
 
     try {
       while (true) {
+        const latestVersion = typeof getLatestVersion === "function" ? getLatestVersion() : null;
         const choice = await showInterfaceMenu(latestVersion);
 
         if (choice === "update") {
@@ -703,38 +717,27 @@ function startServer(latestVersion) {
             enableAutoStart(__filename);
           } catch (e) { }
 
-          if (process.platform === "darwin") {
-            // macOS: keep current process alive — spawning a detached child puts
-            // it outside the login session so NSStatusItem silently fails.
-            process.removeAllListeners("SIGHUP");
-            process.on("SIGHUP", () => {});
-
-            console.log(`\n⏳ Switching to tray mode... (icon already visible in menu bar)`);
-            console.log(`🔔 9Router is running in tray (PID: ${process.pid})`);
-            console.log(`   Server: http://${displayHost}:${port}`);
-            console.log(`\n💡 You can close this terminal. Right-click tray icon to quit.\n`);
-
-            // Tray already init'd at startup — just keep event loop alive.
-            return;
-          }
-
-          // Windows/Linux: spawn detached bgProcess (systray works fine in child)
           console.log(`\n⏳ Starting background process... (tray icon will appear in ~3s)`);
 
-          const bgProcess = spawn(process.execPath, [__filename, "--tray", "--skip-update", "-p", port.toString()], {
-            detached: true,
-            stdio: "ignore",
-            windowsHide: true,
-            env: { ...process.env }
+          if (process.platform === "darwin") {
+            try { await require("./src/cli/tray/tray").killTray(); } catch (e) {}
+            await new Promise((resolve) => setTimeout(resolve, 400));
+          }
+
+          isShuttingDown = true;
+          releaseInteractiveStdin();
+          cleanup();
+
+          const bgProcess = spawnTrayBackgroundProcess({
+            nodePath: process.execPath,
+            scriptPath: __filename,
+            port,
+            env: process.env
           });
-          bgProcess.unref();
 
           console.log(`🔔 9Router is now running in background (PID: ${bgProcess.pid})`);
           console.log(`   Server: http://${displayHost}:${port}`);
-          console.log(`\n💡 You can close this terminal. Right-click tray icon to quit.\n`);
-
-          // cleanup() kills server so bgProcess can claim the port fresh
-          cleanup();
+          console.log(`\n💡 Terminal is released. Right-click tray icon to quit.\n`);
           process.exit(0);
         } else if (choice === "exit") {
           isShuttingDown = true;
@@ -748,7 +751,7 @@ function startServer(latestVersion) {
       cleanup();
       process.exit(1);
     }
-  }, 3000);
+  })();
 
   function attachServerEvents() {
     server.on("error", (err) => {

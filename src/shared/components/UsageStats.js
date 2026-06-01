@@ -16,6 +16,7 @@ import OverviewCards from "@/app/(dashboard)/dashboard/usage/components/Overview
 import UsageTable, { fmt, fmtTime } from "@/app/(dashboard)/dashboard/usage/components/UsageTable";
 import ProviderTopology from "@/app/(dashboard)/dashboard/usage/components/ProviderTopology";
 import UsageChart from "@/app/(dashboard)/dashboard/usage/components/UsageChart";
+import { getRecentRequestTokenMetrics } from "@/shared/utils/usageMetrics";
 
 function timeAgo(timestamp) {
   const diff = Math.floor((Date.now() - new Date(timestamp)) / 1000);
@@ -54,13 +55,14 @@ function RecentRequests({ requests = [] }) {
               <tr className="border-b border-border">
                 <th className="py-1.5 text-left font-semibold text-text-muted w-2"></th>
                 <th className="py-1.5 text-left font-semibold text-text-muted">Model</th>
-                <th className="py-1.5 text-right font-semibold text-text-muted whitespace-nowrap">In / Out</th>
+                <th className="py-1.5 text-right font-semibold text-text-muted whitespace-nowrap">In / Out / Cache</th>
                 <th className="py-1.5 text-right font-semibold text-text-muted">When</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border/50">
               {requests.map((r, i) => {
                 const ok = !r.status || r.status === "ok" || r.status === "success";
+                const tokenMetrics = getRecentRequestTokenMetrics(r);
                 return (
                   <tr key={i} className="hover:bg-bg-subtle transition-colors">
                     <td className="py-1.5">
@@ -68,9 +70,13 @@ function RecentRequests({ requests = [] }) {
                     </td>
                     <td className="py-1.5 font-mono truncate max-w-[120px]" title={r.model}>{r.model}</td>
                     <td className="py-1.5 text-right whitespace-nowrap">
-                      <span className="text-primary">{fmt(r.promptTokens)}↑</span>
+                      <span className="text-primary">{fmt(tokenMetrics.promptTokens)}↑</span>
                       {" "}
-                      <span className="text-success">{fmt(r.completionTokens)}↓</span>
+                      <span className="text-success">{fmt(tokenMetrics.completionTokens)}↓</span>
+                      {" "}
+                      <span className="text-text-muted">
+                        C{fmt(tokenMetrics.cacheInputTokens)}
+                      </span>
                     </td>
                     <td className="py-1.5 text-right text-text-muted whitespace-nowrap"><TimeAgo timestamp={r.timestamp} /></td>
                   </tr>
@@ -91,7 +97,17 @@ function sortData(dataMap, pendingMap = {}, sortBy, sortOrder) {
       const totalCost = data.cost || 0;
       const inputCost = totalTokens > 0 ? (data.promptTokens || 0) * (totalCost / totalTokens) : 0;
       const outputCost = totalTokens > 0 ? (data.completionTokens || 0) * (totalCost / totalTokens) : 0;
-      return { ...data, key, totalTokens, totalCost, inputCost, outputCost, pending: pendingMap[key] || 0 };
+      return {
+        ...data,
+        key,
+        totalTokens,
+        totalCost,
+        inputCost,
+        outputCost,
+        cacheInputTokens: data.cacheInputTokens || 0,
+        cacheOutputTokens: data.cacheOutputTokens || 0,
+        pending: pendingMap[key] || 0,
+      };
     })
     .sort((a, b) => {
       let valA = a[sortBy];
@@ -122,7 +138,19 @@ function groupDataByKey(data, keyField) {
     if (!groups[gk]) {
       groups[gk] = {
         groupKey: gk,
-        summary: { requests: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, cost: 0, inputCost: 0, outputCost: 0, lastUsed: null, pending: 0 },
+        summary: {
+          requests: 0,
+          promptTokens: 0,
+          completionTokens: 0,
+          cacheInputTokens: 0,
+          cacheOutputTokens: 0,
+          totalTokens: 0,
+          cost: 0,
+          inputCost: 0,
+          outputCost: 0,
+          lastUsed: null,
+          pending: 0,
+        },
         items: [],
       };
     }
@@ -134,6 +162,8 @@ function groupDataByKey(data, keyField) {
     s.cost += item.cost || 0;
     s.inputCost += item.inputCost || 0;
     s.outputCost += item.outputCost || 0;
+    s.cacheInputTokens += item.cacheInputTokens || 0;
+    s.cacheOutputTokens += item.cacheOutputTokens || 0;
     s.pending += item.pending || 0;
     if (item.lastUsed && (!s.lastUsed || new Date(item.lastUsed) > new Date(s.lastUsed))) {
       s.lastUsed = item.lastUsed;
@@ -193,14 +223,14 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const sortBy = searchParams.get("sortBy") || "rawModel";
-  const sortOrder = searchParams.get("sortOrder") || "asc";
+  const sortBy = searchParams.get("sortBy") || "totalTokens";
+  const sortOrder = searchParams.get("sortOrder") || "desc";
 
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [fetching, setFetching] = useState(false);
   const [tableView, setTableView] = useState("model");
-  const [viewMode, setViewMode] = useState("costs");
+  const [viewMode, setViewMode] = useState("tokens");
   const [providers, setProviders] = useState([]);
   const [periodLocal, setPeriodLocal] = useState("today");
   const isInitialLoad = useRef(true);
@@ -485,6 +515,7 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
         </div>
         {loading ? spinner : activeTableConfig && (
           <UsageTable
+            key={activeTableConfig.storageKey}
             title=""
             columns={activeTableConfig.columns}
             groupedData={activeTableConfig.groupedData}

@@ -19,8 +19,10 @@ function isAnthropicCompatible(provider) {
   return typeof provider === "string" && provider.startsWith(ANTHROPIC_COMPATIBLE_PREFIX);
 }
 
-function getOpenAICompatibleType(provider) {
+function getOpenAICompatibleType(provider, options = null) {
   if (!isOpenAICompatible(provider)) return "chat";
+  const apiType = options?.apiType || options?.providerSpecificData?.apiType;
+  if (apiType === "responses" || apiType === "chat") return apiType;
   return provider.includes("responses") ? "responses" : "chat";
 }
 
@@ -154,7 +156,7 @@ export function getProviderFallbackCount(provider) {
 // Build provider URL
 export function buildProviderUrl(provider, model, stream = true, options = {}) {
   if (isOpenAICompatible(provider)) {
-    const apiType = getOpenAICompatibleType(provider);
+    const apiType = getOpenAICompatibleType(provider, options);
     const baseUrl = options?.baseUrl || OPENAI_COMPATIBLE_DEFAULTS.baseUrl;
     return buildOpenAICompatibleUrl(baseUrl, apiType);
   }
@@ -320,9 +322,9 @@ export function buildProviderHeaders(provider, credentials, stream = true, body 
 }
 
 // Get target format for provider
-export function getTargetFormat(provider) {
+export function getTargetFormat(provider, credentials = null) {
   if (isOpenAICompatible(provider)) {
-    return getOpenAICompatibleType(provider) === "responses" ? "openai-responses" : "openai";
+    return getOpenAICompatibleType(provider, credentials) === "responses" ? "openai-responses" : "openai";
   }
   if (isAnthropicCompatible(provider)) {
     return "claude";

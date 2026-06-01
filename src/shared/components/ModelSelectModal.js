@@ -27,6 +27,7 @@ export default function ModelSelectModal({
   activeProviders = [],
   title = "Select Model",
   modelAliases = {},
+  initialSearch = "",
   kindFilter = null,
   addedModelValues = [],
   closeOnSelect = true,
@@ -45,6 +46,11 @@ export default function ModelSelectModal({
   const [providerNodes, setProviderNodes] = useState([]);
   const [customModels, setCustomModels] = useState([]);
   const [disabledModels, setDisabledModels] = useState({});
+
+  // Apply initialSearch when modal opens
+  useEffect(() => {
+    if (isOpen && initialSearch) setSearchQuery(initialSearch);
+  }, [isOpen, initialSearch]);
 
   const fetchCombos = async () => {
     try {
@@ -531,6 +537,7 @@ ModelSelectModal.propTypes = {
   title: PropTypes.string,
   modelAliases: PropTypes.object,
   kindFilter: PropTypes.string,
+  initialSearch: PropTypes.string,
   addedModelValues: PropTypes.arrayOf(PropTypes.string),
   closeOnSelect: PropTypes.bool,
 };

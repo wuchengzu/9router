@@ -4,6 +4,7 @@
  */
 import { register } from "../index.js";
 import { FORMATS } from "../formats.js";
+import { isCustomToolCallItem, getToolCallName, getToolCallInput } from "../helpers/toolCallHelper.js";
 
 /**
  * Translate OpenAI chunk to Responses API events
@@ -255,64 +256,66 @@ function closeMessage(state, emit, idx) {
 function emitToolCall(state, emit, tc) {
   const tcIdx = tc.index ?? 0;
   const newCallId = tc.id;
-  const funcName = tc.function?.name;
+  const isCustom = isCustomToolCallItem(tc);
+  const toolName = getToolCallName(tc);
 
-  if (funcName) state.funcNames[tcIdx] = funcName;
+  if (!state.customToolCalls) state.customToolCalls = {};
+  if (toolName) state.funcNames[tcIdx] = toolName;
+  if (isCustom) state.customToolCalls[tcIdx] = true;
 
   if (!state.funcCallIds[tcIdx] && newCallId) {
     state.funcCallIds[tcIdx] = newCallId;
-    
+    const item = isCustom
+      ? { id: `fc_${newCallId}`, type: "custom_tool_call", input: "", call_id: newCallId, name: state.funcNames[tcIdx] || "" }
+      : { id: `fc_${newCallId}`, type: "function_call", arguments: "", call_id: newCallId, name: state.funcNames[tcIdx] || "" };
+
     emit("response.output_item.added", {
       type: "response.output_item.added",
       output_index: tcIdx,
-      item: {
-        id: `fc_${newCallId}`,
-        type: "function_call",
-        arguments: "",
-        call_id: newCallId,
-        name: state.funcNames[tcIdx] || ""
-      }
+      item
     });
   }
 
   if (!state.funcArgsBuf[tcIdx]) state.funcArgsBuf[tcIdx] = "";
 
-  if (tc.function?.arguments) {
+  const input = isCustom ? getToolCallInput(tc) : tc.function?.arguments;
+  if (input) {
     const refCallId = state.funcCallIds[tcIdx] || newCallId;
     if (refCallId) {
-      emit("response.function_call_arguments.delta", {
-        type: "response.function_call_arguments.delta",
+      const eventType = isCustom ? "response.custom_tool_call_input.delta" : "response.function_call_arguments.delta";
+      emit(eventType, {
+        type: eventType,
         item_id: `fc_${refCallId}`,
         output_index: tcIdx,
-        delta: tc.function.arguments
+        delta: input
       });
     }
-    state.funcArgsBuf[tcIdx] += tc.function.arguments;
+    state.funcArgsBuf[tcIdx] += input;
   }
 }
 
 function closeToolCall(state, emit, idx) {
   const callId = state.funcCallIds[idx];
   if (callId && !state.funcItemDone[idx]) {
-    const args = state.funcArgsBuf[idx] || "{}";
-    
-    emit("response.function_call_arguments.done", {
-      type: "response.function_call_arguments.done",
+    const isCustom = !!state.customToolCalls?.[idx];
+    const args = state.funcArgsBuf[idx] || (isCustom ? "" : "{}");
+    const doneEvent = isCustom ? "response.custom_tool_call_input.done" : "response.function_call_arguments.done";
+
+    emit(doneEvent, {
+      type: doneEvent,
       item_id: `fc_${callId}`,
       output_index: parseInt(idx),
-      arguments: args
+      [isCustom ? "input" : "arguments"]: args
     });
+
+    const item = isCustom
+      ? { id: `fc_${callId}`, type: "custom_tool_call", input: args, call_id: callId, name: state.funcNames[idx] || "" }
+      : { id: `fc_${callId}`, type: "function_call", arguments: args, call_id: callId, name: state.funcNames[idx] || "" };
 
     emit("response.output_item.done", {
       type: "response.output_item.done",
       output_index: parseInt(idx),
-      item: {
-        id: `fc_${callId}`,
-        type: "function_call",
-        arguments: args,
-        call_id: callId,
-        name: state.funcNames[idx] || ""
-      }
+      item
     });
 
     state.funcItemDone[idx] = true;

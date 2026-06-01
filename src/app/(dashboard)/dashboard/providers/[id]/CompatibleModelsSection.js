@@ -70,7 +70,7 @@ function CompatibleModelRow({ modelId, fullModel, copied, onCopy, onDeleteAlias,
   );
 }
 
-export default function CompatibleModelsSection({ providerStorageAlias, providerDisplayAlias, modelAliases, copied, onCopy, onSetAlias, onDeleteAlias, connections, isAnthropic }) {
+export default function CompatibleModelsSection({ providerStorageAlias, providerDisplayAlias, modelAliases, copied, onCopy, onSetAlias, onDeleteAlias, connections, isAnthropic, modelSearch = "" }) {
   const [newModel, setNewModel] = useState("");
   const [adding, setAdding] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -104,6 +104,14 @@ export default function CompatibleModelsSection({ providerStorageAlias, provider
     fullModel,
     alias,
   }));
+  const search = modelSearch.trim().toLowerCase();
+  const filteredModels = search
+    ? allModels.filter(({ modelId, fullModel, alias }) => (
+      modelId.toLowerCase().includes(search) ||
+      fullModel.toLowerCase().includes(search) ||
+      alias.toLowerCase().includes(search)
+    ))
+    : allModels;
 
   const generateDefaultAlias = (modelId) => {
     const parts = modelId.split("/");
@@ -213,9 +221,9 @@ export default function CompatibleModelsSection({ providerStorageAlias, provider
         </p>
       )}
 
-      {allModels.length > 0 && (
+      {filteredModels.length > 0 && (
         <div className="flex flex-col gap-3">
-          {allModels.map(({ modelId, fullModel, alias }) => (
+          {filteredModels.map(({ modelId, fullModel, alias }) => (
             <CompatibleModelRow
               key={fullModel}
               modelId={modelId}
@@ -247,4 +255,5 @@ CompatibleModelsSection.propTypes = {
     isActive: PropTypes.bool,
   })).isRequired,
   isAnthropic: PropTypes.bool,
+  modelSearch: PropTypes.string,
 };

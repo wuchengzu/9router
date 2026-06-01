@@ -55,6 +55,7 @@ export default function ProviderDetailPage() {
   const [kiloFreeModels, setKiloFreeModels] = useState([]);
   const [disabledModelIds, setDisabledModelIds] = useState([]);
   const [confirmState, setConfirmState] = useState(null);
+  const [modelSearch, setModelSearch] = useState("");
   const [showAgRiskModal, setShowAgRiskModal] = useState(false);
   const [oneByOneRunning, setOneByOneRunning] = useState(false);
   const [oneByOneStopping, setOneByOneStopping] = useState(false);
@@ -842,6 +843,7 @@ export default function ProviderDetailPage() {
           onDeleteAlias={handleDeleteAlias}
           connections={connections}
           isAnthropic={isAnthropicCompatible}
+          modelSearch={modelSearch}
         />
       );
     }
@@ -852,10 +854,10 @@ export default function ProviderDetailPage() {
       ...kiloFreeModels.filter((fm) => !models.some((m) => m.id === fm.id)),
     ].filter((m) => !m.type || m.type === "llm");
     const disabledSet = new Set(disabledModelIds);
-    const displayModels = allModels.filter((m) => !disabledSet.has(m.id));
-    const disabledDisplayModels = allModels.filter((m) => disabledSet.has(m.id));
+    let displayModels = allModels.filter((m) => !disabledSet.has(m.id));
+    let disabledDisplayModels = allModels.filter((m) => disabledSet.has(m.id));
     // Custom models added by user (stored as aliases: modelId → providerAlias/modelId)
-    const customModels = Object.entries(modelAliases)
+    let customModels = Object.entries(modelAliases)
       .filter(([alias, fullModel]) => {
         const prefix = `${providerStorageAlias}/`;
         if (!fullModel.startsWith(prefix)) return false;
@@ -870,6 +872,14 @@ export default function ProviderDetailPage() {
         alias,
         fullModel,
       }));
+    // Filter by model search
+    const msq = modelSearch.trim().toLowerCase();
+    if (msq) {
+      const match = (id, name) => id.toLowerCase().includes(msq) || (name && name.toLowerCase().includes(msq));
+      displayModels = displayModels.filter((m) => match(m.id, m.name));
+      disabledDisplayModels = disabledDisplayModels.filter((m) => match(m.id, m.name));
+      customModels = customModels.filter((m) => match(m.id, m.alias));
+    }
 
     return (
       <div className="flex flex-wrap gap-3">
@@ -1371,6 +1381,26 @@ export default function ProviderDetailPage() {
               </div>
             );
           })()}
+        </div>
+        <div className="mb-3">
+          <div className="relative">
+            <span className="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted text-[16px]">search</span>
+            <input
+              type="text"
+              placeholder="Filter models..."
+              value={modelSearch}
+              onChange={(e) => setModelSearch(e.target.value)}
+              className="w-full pl-8 pr-8 py-1.5 bg-surface border border-border rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-primary/50"
+            />
+            {modelSearch && (
+              <button
+                onClick={() => setModelSearch("")}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-main"
+              >
+                <span className="material-symbols-outlined text-[14px]">close</span>
+              </button>
+            )}
+          </div>
         </div>
         {!!modelsTestError && (
           <p className="text-xs text-red-500 mb-3 break-words">{modelsTestError}</p>

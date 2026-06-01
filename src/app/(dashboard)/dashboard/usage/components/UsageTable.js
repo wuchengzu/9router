@@ -29,7 +29,7 @@ SortIcon.propTypes = {
 };
 
 /**
- * Render 3 token or cost cells based on viewMode
+ * Render token or cost cells based on viewMode
  */
 function ValueCells({ item, viewMode, isSummary = false }) {
   if (viewMode === "tokens") {
@@ -40,6 +40,9 @@ function ValueCells({ item, viewMode, isSummary = false }) {
         </td>
         <td className="px-6 py-3 text-right text-text-muted">
           {isSummary && item.completionTokens === undefined ? "—" : fmt(item.completionTokens)}
+        </td>
+        <td className="px-6 py-3 text-right text-text-muted">
+          {isSummary && item.cacheInputTokens === undefined ? "—" : fmt(item.cacheInputTokens)}
         </td>
         <td className="px-6 py-3 text-right font-medium">
           {fmt(item.totalTokens)}
@@ -102,16 +105,6 @@ export default function UsageTable({
 }) {
   const [expanded, setExpanded] = useState(new Set());
 
-  // Load expanded state from localStorage
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem(storageKey);
-      if (saved) setExpanded(new Set(JSON.parse(saved)));
-    } catch (e) {
-      console.error(`Failed to load ${storageKey}:`, e);
-    }
-  }, [storageKey]);
-
   // Save expanded state to localStorage
   useEffect(() => {
     try {
@@ -134,6 +127,7 @@ export default function UsageTable({
       return [
         { field: "promptTokens", label: "Input Tokens" },
         { field: "completionTokens", label: "Output Tokens" },
+        { field: "cacheInputTokens", label: "Cached In" },
         { field: "totalTokens", label: "Total Tokens" },
       ];
     }

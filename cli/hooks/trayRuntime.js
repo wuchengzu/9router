@@ -9,7 +9,7 @@
 const { spawnSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
-const { getRuntimeDir, getRuntimeNodeModules, runNpmInstall, summarizeNpmError } = require("./sqliteRuntime");
+const { getRuntimeDir, getRuntimeNodeModules, ensureRuntimeDependency, runNpmInstall, summarizeNpmError } = require("./sqliteRuntime");
 
 const SYSTRAY_PKG = "systray2";
 const SYSTRAY_VERSION = "2.1.4";
@@ -74,7 +74,7 @@ function ensureRuntimeDir() {
 function npmInstall(pkgs, { silent = false } = {}) {
   const cwd = ensureRuntimeDir();
   if (!silent) console.log("⏳ Installing system tray (first run)...");
-  const res = runNpmInstall({ cwd, pkgs, extraArgs: ["--no-save"], timeout: 120000 });
+  const res = runNpmInstall({ cwd, pkgs, timeout: 120000 });
   if (!res.ok && !silent) {
     const reason = summarizeNpmError(res.stderr);
     console.warn("⚠️  System tray install failed — tray disabled");
@@ -94,6 +94,7 @@ function ensureTrayRuntime({ silent = false } = {}) {
   if (process.platform === "win32") {
     return { systray: false, skipped: true };
   }
+  ensureRuntimeDependency(SYSTRAY_PKG, SYSTRAY_VERSION);
   if (hasSystray()) {
     chmodSystrayBin({ silent });
     if (!silent) console.log("✅ System tray ready");
