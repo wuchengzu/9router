@@ -24,12 +24,20 @@ const NO_AUTH_PROVIDER_IDS = Object.keys(FREE_PROVIDERS).filter(id => FREE_PROVI
 
 // Normalize model ID for fuzzy grouping
 // Handles patterns like kimi-k2.5 ≈ kimi-k2p5, claude-sonnet-4-20250514 ≈ claude-sonnet-4
+// Also strips vendor/org prefix (e.g. deepseek-ai/DeepSeek-V4-Pro ≈ deepseek-v4-pro)
 function normalizeForGrouping(modelId) {
   let s = modelId.toLowerCase();
+  // Strip vendor/org prefix (everything up to and including last /)
+  // e.g. "deepseek-ai/DeepSeek-V4-Pro" → "DeepSeek-V4-Pro"
+  //      "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b" → "deepseek-r1-distill-qwen-32b"
+  const lastSlash = s.lastIndexOf("/");
+  if (lastSlash !== -1) {
+    s = s.slice(lastSlash + 1);
+  }
   // Remove date suffixes like -20250514
   s = s.replace(/-\d{6,8}$/, "");
-  // Remove separators
-  s = s.replace(/[-_.]/g, "");
+  // Normalize separators to dash
+  s = s.replace(/[-_.]/g, "-");
   // Normalize p between digits (.5 ≈ p5 ≈ 5)
   s = s.replace(/(\d)p(\d)/g, "$1$2");
   return s;
@@ -47,6 +55,8 @@ export default function CombosPage() {
   const [autoCreating, setAutoCreating] = useState(false);
   const [syncingAll, setSyncingAll] = useState(false);
   const [syncingIds, setSyncingIds] = useState(new Set());
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [batchMode, setBatchMode] = useState(false);
   const [resultState, setResultState] = useState(null);
   const [modelAliases, setModelAliases] = useState({});
   const [providerNodes, setProviderNodes] = useState([]);
@@ -176,20 +186,33 @@ export default function CombosPage() {
           groups.set(normalized, { canonicalId: modelId, models: [] });
         }
         const group = groups.get(normalized);
-        const providerOrder = PROVIDER_ORDER.indexOf(providerId);
-        // Prefer canonicalId from higher-priority provider; tiebreak by shorter id
-        const currentOrder = group.canonicalProviderOrder ?? 999;
-        if (providerOrder < currentOrder || (providerOrder === currentOrder && modelId.length < group.canonicalId.length)) {
+        const isCustomProvider = isCustom;
+        const rawOrder = PROVIDER_ORDER.indexOf(providerId);
+        const providerOrder = rawOrder === -1 ? 999 : rawOrder;
+        const customPriority = isCustomProvider ? 0 : 1;
+        // canonicalId: prefer clean modelId (no /) for valid combo name
+        const newClean = !modelId.includes("/");
+        const curClean = group.canonicalClean ?? true;
+        const curOrder = group.canonicalProviderOrder ?? 999;
+        if (
+          (newClean && !curClean) ||
+          (newClean === curClean && providerOrder < curOrder) ||
+          (newClean === curClean && providerOrder === curOrder && modelId.length < (group.canonicalId?.length ?? 999))
+        ) {
           group.canonicalId = modelId;
           group.canonicalProviderOrder = providerOrder;
+          group.canonicalClean = newClean;
         }
-        group.models.push({ value, providerId, modelId, providerOrder: providerOrder === -1 ? 999 : providerOrder });
+        group.models.push({ value, providerId, modelId, providerOrder, customPriority });
       });
     });
 
     // Sort models within each group by provider order, dedupe by value
     groups.forEach((group) => {
-      group.models.sort((a, b) => a.providerOrder - b.providerOrder);
+      group.models.sort((a, b) => {
+        if (a.customPriority !== b.customPriority) return a.customPriority - b.customPriority;
+        return a.providerOrder - b.providerOrder;
+      });
       const seen = new Set();
       group.models = group.models.filter(m => {
         if (seen.has(m.value)) return false;
@@ -263,7 +286,7 @@ export default function CombosPage() {
         added,
         removed,
         synced,
-        changed: added.length > 0 || removed.length > 0,
+        changed: added.length > 0 || removed.length > 0 || synced.join(",") !== combo.models.join(","),
         notFound: false,
       };
     }
@@ -396,6 +419,26 @@ export default function CombosPage() {
     });
   };
 
+  const handleBatchDelete = () => {
+    const count = selectedIds.size;
+    if (count === 0) return;
+    setConfirmState({
+      title: "Delete Combos",
+      message: `Delete ${count} combo(s)?`,
+      onConfirm: async () => {
+        setConfirmState(null);
+        try {
+          const ids = [...selectedIds];
+          await Promise.all(ids.map(id => fetch(`/api/combos/${id}`, { method: "DELETE" })));
+          setCombos(combos.filter(c => !selectedIds.has(c.id)));
+          setSelectedIds(new Set());
+        } catch (error) {
+          console.log("Error deleting combos:", error);
+        }
+      }
+    });
+  };
+
   const handleToggleRoundRobin = async (comboName, enabled) => {
     try {
       const updated = { ...comboStrategies };
@@ -437,15 +480,49 @@ export default function CombosPage() {
           </p>
         </div>
         <div className="grid grid-cols-1 gap-2 sm:flex sm:w-auto">
-          <Button icon="auto_awesome" onClick={handleAutoCombos} disabled={autoCreating} variant="secondary" className="w-full sm:w-auto">
-            {autoCreating ? "Creating..." : "Auto Combos"}
-          </Button>
-          <Button icon="sync" onClick={handleSyncAll} disabled={syncingAll || combos.length === 0} variant="secondary" className="w-full sm:w-auto">
-            {syncingAll ? "Syncing..." : "Sync All"}
-          </Button>
-          <Button icon="add" onClick={() => setShowCreateModal(true)} className="w-full sm:w-auto">
-            Create Combo
-          </Button>
+          {batchMode ? (
+            <>
+              <Button icon="close" onClick={() => { setBatchMode(false); setSelectedIds(new Set()); }} variant="ghost" className="w-full sm:w-auto">
+                Cancel
+              </Button>
+              <Button
+                icon={selectedIds.size === combos.length ? "deselect" : "select_all"}
+                onClick={() => {
+                  if (selectedIds.size === combos.length) {
+                    setSelectedIds(new Set());
+                  } else {
+                    setSelectedIds(new Set(combos.map(c => c.id)));
+                  }
+                }}
+                variant="secondary"
+                className="w-full sm:w-auto"
+              >
+                {selectedIds.size === combos.length ? "Deselect All" : "Select All"}
+              </Button>
+              {selectedIds.size > 0 && (
+                <Button icon="delete" onClick={handleBatchDelete} variant="danger" className="w-full sm:w-auto">
+                  Delete ({selectedIds.size})
+                </Button>
+              )}
+            </>
+          ) : (
+            <>
+              <Button icon="auto_awesome" onClick={handleAutoCombos} disabled={autoCreating} variant="secondary" className="w-full sm:w-auto">
+                {autoCreating ? "Creating..." : "Auto Combos"}
+              </Button>
+              <Button icon="sync" onClick={handleSyncAll} disabled={syncingAll || combos.length === 0} variant="secondary" className="w-full sm:w-auto">
+                {syncingAll ? "Syncing..." : "Sync All"}
+              </Button>
+              <Button icon="add" onClick={() => setShowCreateModal(true)} className="w-full sm:w-auto">
+                Create Combo
+              </Button>
+              {combos.length > 0 && (
+                <Button icon="checklist" onClick={() => setBatchMode(true)} variant="secondary" className="w-full sm:w-auto">
+                  Batch Edit
+                </Button>
+              )}
+            </>
+          )}
         </div>
       </div>
 
@@ -471,6 +548,15 @@ export default function CombosPage() {
               combo={combo}
               copied={copied}
               syncing={syncingIds.has(combo.id)}
+              isSelected={selectedIds.has(combo.id)}
+              batchMode={batchMode}
+              onToggleSelect={() => {
+                setSelectedIds(prev => {
+                  const next = new Set(prev);
+                  if (next.has(combo.id)) next.delete(combo.id); else next.add(combo.id);
+                  return next;
+                });
+              }}
               onCopy={copy}
               onEdit={() => setEditingCombo(combo)}
               onDelete={() => handleDelete(combo.id)}
@@ -642,11 +728,24 @@ export default function CombosPage() {
   );
 }
 
-function ComboCard({ combo, copied, syncing, onCopy, onEdit, onDelete, onSync, roundRobinEnabled, onToggleRoundRobin }) {
+function ComboCard({ combo, copied, syncing, isSelected, batchMode, onToggleSelect, onCopy, onEdit, onDelete, onSync, roundRobinEnabled, onToggleRoundRobin }) {
   return (
     <Card padding="sm" className="group">
       <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex min-w-0 flex-1 items-start gap-3 sm:items-center">
+          {batchMode && (
+            <button
+              onClick={onToggleSelect}
+              className={`size-8 rounded-lg flex items-center justify-center shrink-0 transition-colors ${
+                isSelected ? "bg-primary/20 text-primary" : "bg-black/[0.02] text-text-muted hover:bg-black/10 dark:bg-white/[0.02] dark:hover:bg-white/10"
+              }`}
+              title={isSelected ? "Deselect" : "Select"}
+            >
+              <span className="material-symbols-outlined text-[18px]">
+                {isSelected ? "check_circle" : "radio_button_unchecked"}
+              </span>
+            </button>
+          )}
           <div className="size-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
             <span className="material-symbols-outlined text-primary text-[18px]">layers</span>
           </div>
